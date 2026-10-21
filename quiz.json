@@ -1,0 +1,48 @@
+{
+  "Final Fantasy": [
+    {"q": "Quel est le prénom du héros de Final Fantasy VII ?", "r": ["Cloud", "Clad", "Cloud Strife"]},
+    {"q": "Dans Final Fantasy VIII, comment s'appelle l'arme de Squall ?", "r": ["Gunblade", "Gun blade"]},
+    {"q": "Quel jeu de cartes se joue dans Final Fantasy VIII ?", "r": ["Triple Triad"]},
+    {"q": "Quel jeu de cartes se joue dans Final Fantasy IX ?", "r": ["Tetra Master"]},
+    {"q": "Comment s'appelle le héros de Final Fantasy IX ?", "r": ["Djidane", "Zidane", "Zidane Tribal"]},
+    {"q": "Quel est le sport pratiqué par Tidus dans Final Fantasy X ?", "r": ["Blitzball", "Blitz ball"]},
+    {"q": "Comment s'appelle la monture jaune emblématique de la série ?", "r": ["Chocobo"]},
+    {"q": "Quel petit être blanc à pompon dit « Kupo » ?", "r": ["Mog", "Moogle", "Mogri"]},
+    {"q": "Qui est l'antagoniste principal de Final Fantasy VII ?", "r": ["Sephiroth", "Séphiroth"]},
+    {"q": "Qui est l'antagoniste principal de Final Fantasy VI ?", "r": ["Kefka", "Kefka Palazzo"]},
+    {"q": "Quelle sorcière affronte-t-on à la fin de Final Fantasy VIII ?", "r": ["Ultimecia", "Ultimécia"]},
+    {"q": "Quelle invocation de glace revient dans presque tous les épisodes ?", "r": ["Shiva"]},
+    {"q": "Quelle invocation de feu revient dans presque tous les épisodes ?", "r": ["Ifrit"]},
+    {"q": "Quel dragon est le roi des invocations ?", "r": ["Bahamut"]},
+    {"q": "Comment s'appelle la ville où commence Final Fantasy VII ?", "r": ["Midgar"]},
+    {"q": "Dans quelle université militaire étudie Squall ?", "r": ["Balamb Garden Université", "BGU", "Balamb Garden", "Garden de Balamb"]},
+    {"q": "Quel compositeur a signé la musique des premiers Final Fantasy ?", "r": ["Nobuo Uematsu", "Uematsu"]},
+    {"q": "Quel est le prénom de l'invokeuse héroïne de Final Fantasy X ?", "r": ["Yuna"]},
+    {"q": "Quel personnage récurrent de la série s'appelle Cid ? Donne son prénom.", "r": ["Cid"]},
+    {"q": "Quelle monnaie utilise-t-on dans Final Fantasy ?", "r": ["Gil", "Gils"]}
+  ],
+  "Triple Triad": [
+    {"q": "Combien de cases compte le plateau du Triple Triad ?", "r": ["9", "neuf"]},
+    {"q": "Combien de cartes chaque joueur a-t-il en main en début de partie ?", "r": ["5", "cinq"]},
+    {"q": "Quelle valeur représente la lettre A sur une carte ?", "r": ["10", "dix"]},
+    {"q": "Quelle règle rend les cartes de l'adversaire visibles ?", "r": ["Open"]},
+    {"q": "Quelle règle retourne une carte quand deux sommes de chiffres sont égales ?", "r": ["Plus"]},
+    {"q": "Quelle règle retourne une carte quand deux chiffres qui se touchent sont égaux à ceux des voisines ?", "r": ["Identique", "Same"]},
+    {"q": "Quelle règle relie le haut du plateau au bas et la gauche à la droite ?", "r": ["Mur cassé", "Mur casse"]},
+    {"q": "Quelle règle, propre au FFWTT, fait glisser une ligne ou une colonne ?", "r": ["Mur puissant"]},
+    {"q": "Avec la règle Élémentaire, quel malus subit une carte posée sur un autre élément ?", "r": ["-1", "1", "moins 1", "moins un"]},
+    {"q": "Avec la règle Bataille, que compare-t-on quand deux chiffres sont égaux ?", "r": ["la somme", "somme", "la somme des chiffres", "les sommes"]},
+    {"q": "Comment appelle-t-on la réaction en chaîne après un Identique ou un Plus ?", "r": ["Combo", "Combos"]},
+    {"q": "Quelle règle du vainqueur ne met aucune carte en jeu et ne rapporte rien ?", "r": ["Entraînement", "Entrainement"]}
+  ],
+  "Jeux vidéo": [
+    {"q": "Dans quel jeu incarne-t-on Crono, voyageur du temps ?", "r": ["Chrono Trigger"]},
+    {"q": "Quel RPG de Square met en scène Serge et ses mondes parallèles ?", "r": ["Chrono Cross"]},
+    {"q": "Dans Kingdom Hearts, comment s'appelle le héros porteur de la Keyblade ?", "r": ["Sora"]},
+    {"q": "Quel jeu est connu en Europe sous le nom de Secret of Mana ?", "r": ["Seiken Densetsu 2", "Seiken Densetsu II"]},
+    {"q": "Dans Golden Sun, comment s'appelle l'énergie utilisée par les mystiques ?", "r": ["Psynergie", "Psynergy"]},
+    {"q": "Quel est le nom japonais de la série Suikoden ?", "r": ["Genso Suikoden", "Gensou Suikoden"]},
+    {"q": "Dans Tales of Symphonia, comment s'appelle le héros aux deux épées ?", "r": ["Lloyd", "Lloyd Irving"]},
+    {"q": "Dans Breath of Fire, en quoi le héros Ryu peut-il se transformer ?", "r": ["Dragon", "en dragon"]}
+  ]
+}

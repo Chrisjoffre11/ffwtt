@@ -1,0 +1,6 @@
+Bienvenue sur ce serveur FFWTT privé !
+Personne en ligne ? Quatre robots sont là pour jouer : Mog-Facile, Chocobo-Moyen, Tonberry-Dur et Bahamut-Extrême, section Robot de la liste des joueurs.
+Défie-les avec les règles de ton choix (jamais de mise ni de cartes en jeu contre eux) : plus le robot est fort, plus la victoire rapporte. Tape !robots pour le détail.
+Tape !aide pour voir les commandes disponibles.
+Bon jeu.
+English speaker? Type !language en

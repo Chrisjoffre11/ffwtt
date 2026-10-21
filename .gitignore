@@ -1,0 +1,12 @@
+# --- Donnees d'un serveur en service : jamais dans le depot ---
+*.db
+*.db-journal
+*.log
+__pycache__/
+.depot_public
+
+# --- Fichiers du jeu et captures ---
+*.exe
+*.zip
+*.bin
+*.pcap
