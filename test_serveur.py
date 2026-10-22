@@ -683,12 +683,14 @@ def main():
         verifier("admin : op81 (page d'accueil) en tete de rafale" if avec_accueil else "admin : pas d'op81 sans --accueil",
                  ops[:1] == [81] if avec_accueil else 81 not in ops, str(ops[:3]))
         i45 = ops.index(45) if 45 in ops else -1
-        # un operateur de niveau 4 recoit ses grades par op61 : 14 (pastille « 4 ») et 3 (salon des operateurs).
-        # Plus 21 / 5 (animateur, quizz) : le niveau 4 en a deja toutes les permissions, et chaque op61 fait ecrire
-        # au client « X est maintenant un(e) ... » a chaque connexion.
-        recus61 = [pl[-1] for o, pl in tr[i45+1:i45+6] if o == 61 and pl[:6] == bytes([1]) + P.field_int(pid_adm)]
-        verifier("admin : grades par op61 juste apres op45, apres les op87",
-                 i45 > 0 and recus61 == [14, 3] and 87 in ops[:i45], str(recus61))
+        # un operateur de niveau 4 recoit ses grades par op61 : 14 (pastille « 4 »), 3 (salon des operateurs) et 5
+        # (responsable des quizz : le panneau Quizz). Pas 21 (animateur) : le niveau 4 en a deja toutes les permissions,
+        # et chaque op61 fait ecrire au client « X est maintenant un(e) ... » a chaque connexion.
+        recus61 = [pl[-1] for o, pl in tr[i45+1:i45+10] if o == 61 and pl[:6] == bytes([1]) + P.field_int(pid_adm)]
+        verifier("admin : grades par op61 juste apres op45 et les panneaux (op177), apres les op87",
+                 i45 > 0 and recus61 == [14, 3, 5] and 87 in ops[:i45]
+                 and all(o in (177, 211, 231) for o in ops[i45 + 1:next((i for i, o in enumerate(ops) if o == 61), 0)]),
+                 str(recus61))
         import ffwtt_server as _S
         groupes = {([v for k, v in _S.parse_typed(pl) if k == "int"] or [0])[0]:
                    ([v for k, v in _S.parse_typed(pl) if k == "str"] or [""])[0] for o, pl in tr if o == 86}
@@ -823,9 +825,11 @@ def main():
         # -- aiguillage par categorie : une trame de categorie 5 ou 6 ne descend plus dans les branches 0 a 3
         jo.sendall(P.build_frame(32, bytes([5])))        # « Arreter le quizz » (panneau Quizz) = cat5 op32
         jo.sendall(P.build_frame(35, bytes([5])))        # « Remise a zero des points » = cat5 op35
-        r = [o for o, _ in frames(lire(jo, 0.8))]
-        verifier("aiguillage : cat5 op32 / op35 ne lancent plus de duel (ni op33, ni op36, ni main)",
-                 33 not in r and 36 not in r and 135 not in r, str(r))
+        rf = frames(lire(jo, 0.8)); r = [o for o, _ in rf]
+        # op34 / op36 de categorie 5 sont les refus du panneau Quizz (pas de panneau : 87), pas des trames de duel
+        verifier("aiguillage : cat5 op32 / op35 ne lancent plus de duel (ni op33, ni op36 de duel, ni main)",
+                 not any(o in (33, 36) and pl[:1] != bytes([5]) for o, pl in rf) and 135 not in r
+                 and (34, bytes([5, 6, 0, 5, 87])) in rf and (36, bytes([5, 6, 0, 5, 87])) in rf, str(r))
         jo.sendall(P.build_frame(227, bytes([5])))       # /points
         verifier("/points (cat5 op227) : op228 05 int(points)", (228, bytes([5]) + P.field_int(0)) in frames(lire(jo, 0.6)))
         # -- notes personnelles : cat6 op64 x(texte) -> op65 06 b1 ; rendues dans op66 sur son propre profil
@@ -1009,6 +1013,160 @@ def main():
                  and (189, bytes([2, 6, 0, 5, 31])) in r2 and (189, bytes([2, 6, 0, 5, 32])) in r3, str(r2)[:80])
         if fiche:                                        # retirer la vente : les sections suivantes comptent les encheres
             jo.sendall(P.build_frame(194, bytes([2]) + bytes([2]) + fiche[2:6] + P.field_byte(1))); lire(jo, 0.5)
+
+        # ================= PANNEAU QUIZZ DU CLIENT (cat5 op21 a op40, lu dans le binaire le 2026-10-22, jamais capture) =====
+        # Groupe 30 « Quizz » avec les fonctions de la capture (chat, topic, quizz), ouvert par op177(grade 5) ; categories
+        # et questions en base, importees de quiz.json a la premiere mise en route.
+        q5 = lambda op_, corps=b"": P.build_frame(op_, bytes([5]) + corps)
+        cat5 = lambda r_, op_: [pl for o, pl in r_ if o == op_ and pl[:1] == bytes([5])]
+        def attendre(sock, op_, duree):
+            """Lit jusqu'a recevoir une trame de categorie 5 de cet opcode (au plus 'duree' secondes)."""
+            fin = time.time() + duree; brut = b""
+            while time.time() < fin and not cat5(frames(brut), op_): brut += lire(sock, 0.5)
+            return frames(brut)
+        lire(op_s, 0.3); lire(jo, 0.3)
+        tr_q = frames(RAFALES["Gerant"]); ops_q = [o for o, _ in tr_q]
+        g30 = next((pl for o, pl in tr_q if o == 86 and champ_ints(pl)[:1] == [30]), b"")
+        i177q = next((i for i, (o, pl) in enumerate(tr_q) if o == 177 and pl == bytes([4, 6, 1]) + P.field_int(5)), -1)
+        mes61 = [pl[-1] for o, pl in tr_q if o == 61 and pl[:6] == bytes([1]) + P.field_int(pid_op)]
+        verifier("panneau Quizz : groupe 30 (chat, topic, quizz) ouvert par op177(grade 5) avant op61 / op59, grade 5 une seule fois",
+                 all(P.field_str(f) in g30 for f in ("chat", "topic", "quizz")) and i177q > 0 and mes61.count(5) == 1
+                 and all(i > i177q for i, o in enumerate(ops_q) if o in (59, 61)), f"{i177q} {mes61}")
+        cats_db = _c.execute("SELECT k.id, k.nom, (SELECT COUNT(*) FROM quiz_questions q WHERE q.categorie=k.id) "
+                             "FROM quiz_categories k ORDER BY k.id").fetchall()
+        i62 = ops_q.index(62) if 62 in ops_q else len(ops_q)
+        pos20 = [i for i, (o, pl) in enumerate(tr_q) if o == 20 and pl[:1] == bytes([5])]
+        i28 = next((i for i, (o, pl) in enumerate(tr_q) if o == 28 and pl == bytes([5])), -1)
+        verifier("panneau Quizz : a l'entree, apres op62, les 3 themes de quiz.json (op20 int(id) str(nom) int(nombre)), op28, op39",
+                 len(cats_db) == 3 and sum(n for _, _, n in cats_db) == 40
+                 and [tr_q[i][1] for i in pos20] == [bytes([5]) + P.field_int(i) + P.field_str(nom) + P.field_int(n)
+                                                     for i, nom, n in cats_db]
+                 and pos20 and min(pos20) > i62 and i28 > max(pos20) and cat5(tr_q[i28:], 39), str(cats_db))
+        r_g = frames(RAFALES["Gaspard"])
+        verifier("panneau Quizz : rien pour un joueur sans grade (ni op177, ni categories)",
+                 177 not in [o for o, _ in r_g] and not cat5(r_g, 20) and not cat5(r_g, 28))
+        # -- droits : le client ne verifie rien, le serveur refuse a qui n'a pas le panneau
+        jo.sendall(q5(21, P.field_byte(1) + P.field_str("Pirate")))
+        jo.sendall(q5(40, P.field_int(30) + P.field_int(cats_db[0][0])))
+        jo.sendall(q5(29, P.field_int(45) + P.field_int(15) + P.field_int(cats_db[0][0])))
+        rj = frames(lire(jo, 0.8))
+        verifier("panneau Quizz : refuse sans le panneau (op22 05 b1 b0 v87, op42 05 b0 v87 sans op41, op31 05 b0 v87)",
+                 (22, bytes([5, 6, 1, 6, 0, 5, 87])) in rj and (42, bytes([5, 6, 0, 5, 87])) in rj
+                 and (31, bytes([5, 6, 0, 5, 87])) in rj and not cat5(rj, 41) and not cat5(rj, 220), str(rj)[:150])
+        # -- categories
+        op_s.sendall(q5(21, P.field_byte(1) + P.field_str("  Culture   G ")))
+        ro = frames(lire(op_s, 0.8)); rj = frames(lire(jo, 0.4))
+        cid_q = (_c.execute("SELECT id FROM quiz_categories WHERE nom='Culture G'").fetchone() or [0])[0]
+        verifier("panneau Quizz : categorie ajoutee (op22 05 b1 b1 ; op20 05 int(id) str(nom) int(0) au panneau, pas aux joueurs)",
+                 cid_q > 0 and (22, bytes([5, 6, 1, 6, 1])) in ro
+                 and (20, bytes([5]) + P.field_int(cid_q) + P.field_str("Culture G") + P.field_int(0)) in ro
+                 and not cat5(rj, 20), str(ro)[:150])
+        op_s.sendall(q5(21, P.field_byte(1) + P.field_str("culture g"))); r1 = frames(lire(op_s, 0.6))
+        op_s.sendall(q5(21, P.field_byte(1) + P.field_str("   "))); r2 = frames(lire(op_s, 0.6))
+        op_s.sendall(q5(21, P.field_byte(1) + P.field_str("Piege#10"))); r3 = frames(lire(op_s, 0.6))
+        verifier("panneau Quizz : nom existant (v109, majuscules comprises), vide ou contenant « #10 » (v0)",
+                 (22, bytes([5, 6, 1, 6, 0, 5, 109])) in r1 and (22, bytes([5, 6, 1, 6, 0, 5, 0])) in r2
+                 and (22, bytes([5, 6, 1, 6, 0, 5, 0])) in r3)
+        # -- questions
+        t0 = int(time.time()); enonce = "Combien de cartes dans une main ?"
+        op_s.sendall(q5(25, P.field_byte(1) + P.field_int(cid_q) + P.field_str(enonce) + P.field_str("Cinq | 5")))
+        ro = frames(lire(op_s, 0.8))
+        qid_q, ts_q = _c.execute("SELECT id, ts FROM quiz_questions WHERE categorie=?", (cid_q,)).fetchone() or (0, 0)
+        p24 = next(iter(cat5(ro, 24)), b"")
+        attendu24 = (bytes([5]) + P.field_int(qid_q) + P.field_int(cid_q) + P.field_str(enonce) + P.field_str("Cinq | 5")
+                     + P.field_str("Gerant") + P.field_int(ts_q))
+        verifier("panneau Quizz : question ajoutee (op26 05 b1 b1 ; op24 id, categorie, question, reponses, auteur, date Unix)",
+                 (26, bytes([5, 6, 1, 6, 1])) in ro and p24 == attendu24 and abs(ts_q - t0) <= 5, p24.hex())
+        op_s.sendall(q5(25, P.field_byte(1) + P.field_int(999999) + P.field_str("Q ?") + P.field_str("R")))
+        r1 = frames(lire(op_s, 0.6))
+        op_s.sendall(q5(25, P.field_byte(1) + P.field_int(cid_q) + P.field_str("Q ?") + P.field_str("A#10B")))
+        r2 = frames(lire(op_s, 0.6))
+        verifier("panneau Quizz : categorie inconnue (op26 05 b1 b0 v110 int(numero)), reponse avec « #10 » (v0)",
+                 (26, bytes([5, 6, 1, 6, 0, 5, 110]) + P.field_int(999999)) in r1 and (26, bytes([5, 6, 1, 6, 0, 5, 0])) in r2)
+        op_s.sendall(q5(40, P.field_int(30) + P.field_int(cid_q)))
+        ro = frames(lire(op_s, 0.8)); ops_r = [o for o, _ in ro]
+        p41 = next(iter(cat5(ro, 41)), b"")
+        texte41 = (_zl.decompressobj().decompress(p41[14:14 + struct.unpack_from("<H", p41, 12)[0]])
+                   if p41[:11] == bytes([5]) + P.field_int(30) + P.field_int(cid_q) and p41[11:12] == b"\x08" else b"")
+        verifier("panneau Quizz : questions d'une categorie (op41 groupe, categorie, x « id#10question#10reponse#10auteur#10date »"
+                 " puis op42 05 b1 int(30) int(categorie))",
+                 texte41 == f"{qid_q}#10{enonce}#10Cinq | 5#10Gerant#10{ts_q}".encode("latin1")
+                 and (42, bytes([5, 6, 1]) + P.field_int(30) + P.field_int(cid_q)) in ro and ops_r.index(41) < ops_r.index(42),
+                 texte41[:80])
+        op_s.sendall(q5(40, P.field_int(10) + P.field_int(cid_q)))
+        verifier("panneau Quizz : questions demandees pour un autre groupe -> op42 05 b0 v87",
+                 (42, bytes([5, 6, 0, 5, 87])) in frames(lire(op_s, 0.6)))
+        import ffwtt_server as _SQ
+        _questions = _SQ.db.quiz_questions
+        _SQ.db.quiz_questions = lambda _cid: [{"id": i, "question": "Q" * 250, "reponses": ["R" * 100], "auteur": "Gerant",
+                                               "ts": 1760000000} for i in range(1, 401)]
+        try: morceaux = _SQ.fiches_quiz(1)
+        finally: _SQ.db.quiz_questions = _questions
+        verifier("panneau Quizz : 400 questions -> plusieurs op41 de moins de 64 Ko, faits de fiches entieres (5 champs)",
+                 len(morceaux) >= 2 and all(len(m.encode("latin1")) <= 65535 for m in morceaux)
+                 and all(len(m.split("#10")) % 5 == 0 for m in morceaux)
+                 and sum(len(m.split("#10")) for m in morceaux) == 400 * 5, str([len(m) for m in morceaux]))
+        # -- points, demarrage, refus pendant le quizz, bonne reponse, fin naturelle
+        op_s.sendall(q5(35)); ro = frames(lire(op_s, 0.8)); rj = frames(lire(jo, 0.4))
+        verifier("panneau Quizz : remise a zero (op36 05 b1 ; op226 int(pid) a tous ; op39 vide au panneau seulement)",
+                 (36, bytes([5, 6, 1])) in ro and (226, bytes([5]) + P.field_int(pid_op)) in rj and (39, bytes([5])) in ro
+                 and not cat5(rj, 39))
+        op_s.sendall(q5(32)); r_stop = frames(lire(op_s, 0.6))
+        op_s.sendall(q5(21, P.field_byte(1) + P.field_str("Vide"))); lire(op_s, 0.6)
+        cid_v = (_c.execute("SELECT id FROM quiz_categories WHERE nom='Vide'").fetchone() or [0])[0]
+        op_s.sendall(q5(29, P.field_int(45) + P.field_int(15) + P.field_int(cid_v))); r115 = frames(lire(op_s, 0.6))
+        verifier("panneau Quizz : arreter sans quizz (op34 05 b0 v113), demarrer sans question (op31 05 b0 v115)",
+                 (34, bytes([5, 6, 0, 5, 113])) in r_stop and (31, bytes([5, 6, 0, 5, 115])) in r115)
+        op_s.sendall(q5(29, P.field_int(2) + P.field_int(1) + P.field_int(cid_q) + P.field_int(cid_v)))
+        ro = frames(lire(op_s, 0.6)); rj = frames(lire(jo, 0.3))
+        verifier("panneau Quizz : demarrer (op31 05 b1 ; op30 temps bornes a 5 s + categories utilisees, au panneau ; op220 a tous)",
+                 (31, bytes([5, 6, 1])) in ro and (30, bytes([5]) + P.field_int(5) + P.field_int(5) + P.field_int(cid_q)) in ro
+                 and any(pl[:6] == bytes([5]) + P.field_int(pid_op) for pl in cat5(rj, 220)) and not cat5(rj, 30), str(ro)[:150])
+        op_s.sendall(q5(29, P.field_int(45) + P.field_int(15) + P.field_int(cid_q))); r114 = frames(lire(op_s, 0.3))
+        op_s.sendall(q5(21, P.field_byte(0) + P.field_int(cid_q))); r112a = frames(lire(op_s, 0.3))
+        op_s.sendall(q5(25, P.field_byte(0) + P.field_int(cid_q) + P.field_int(qid_q))); r112b = frames(lire(op_s, 0.3))
+        op_s.sendall(q5(25, P.field_byte(1) + P.field_int(cid_q) + P.field_str("Autre ?") + P.field_str("Oui")))
+        r112c = frames(lire(op_s, 0.3))
+        verifier("panneau Quizz : pendant le quizz, 2e demarrage (v114) ; suppression ou ajout dans une categorie utilisee (v112)",
+                 (31, bytes([5, 6, 0, 5, 114])) in r114 and (22, bytes([5, 6, 0, 6, 0, 5, 112])) in r112a
+                 and (26, bytes([5, 6, 0, 6, 0, 5, 112])) in r112b and (26, bytes([5, 6, 1, 6, 0, 5, 112])) in r112c)
+        rj = attendre(jo, 223, 8.0)
+        jo.sendall(P.build_frame(144, bytes([1]) + P.field_str("cinq") + P.field_byte(0)))
+        ro = attendre(op_s, 39, 3.0)
+        verifier("panneau Quizz : la question (op223), puis bonne reponse -> op224 et points au panneau (op39 int(pid) int(1))",
+                 any(P.field_str(enonce) in pl for pl in cat5(rj, 223))
+                 and (224, bytes([5]) + P.field_int(pid_jo) + P.field_int(1) + P.field_str("Cinq")) in ro
+                 and (39, bytes([5]) + P.field_int(pid_jo) + P.field_int(1)) in ro, str([o for o, _ in ro]))
+        ro = attendre(op_s, 33, 9.0)
+        verifier("panneau Quizz : plus de question -> op33 05 au panneau (le bouton Demarrer revient) et top 5 (op222)",
+                 (33, bytes([5])) in ro and (222, bytes([5]) + P.field_int(pid_jo) + P.field_int(1)) in ro, str(ro)[-150:])
+        op_s.sendall(q5(29, P.field_int(500) + P.field_int(4000) + P.field_int(cid_q))); ro = frames(lire(op_s, 0.5))
+        op_s.sendall(q5(32)); ro2 = frames(lire(op_s, 0.6)); rj = frames(lire(jo, 0.5))
+        verifier("panneau Quizz : temps bornes a 300 s (op30), arret (op34 05 b1, op33 au panneau, op221 int(pid) a tous)",
+                 (30, bytes([5]) + P.field_int(300) + P.field_int(300) + P.field_int(cid_q)) in ro
+                 and (34, bytes([5, 6, 1])) in ro2 and (33, bytes([5])) in ro2 and (221, bytes([5]) + P.field_int(pid_op)) in rj)
+        op_s.sendall(q5(37)); ro = frames(lire(op_s, 0.6)); rj = frames(lire(jo, 0.4))
+        verifier("panneau Quizz : « Afficher le top5 actuel » (op38 05 b1 ; op222 a tous)",
+                 (38, bytes([5, 6, 1])) in ro and (222, bytes([5]) + P.field_int(pid_jo) + P.field_int(1)) in rj)
+        # -- suppressions (« Editer » = suppression puis ajout)
+        op_s.sendall(q5(25, P.field_byte(0) + P.field_int(cid_q) + P.field_int(qid_q + 1000))); r111 = frames(lire(op_s, 0.5))
+        op_s.sendall(q5(25, P.field_byte(0) + P.field_int(cid_q) + P.field_int(qid_q))); rdq = frames(lire(op_s, 0.5))
+        op_s.sendall(q5(21, P.field_byte(0) + P.field_int(cid_q))); rdc = frames(lire(op_s, 0.5))
+        op_s.sendall(q5(21, P.field_byte(0) + P.field_int(cid_q))); r110 = frames(lire(op_s, 0.5))
+        verifier("panneau Quizz : suppressions (op26 05 b0 b1 + op27 ; op22 05 b0 b1 + op23), inconnues v111 / v110 + numero",
+                 (26, bytes([5, 6, 0, 6, 0, 5, 111]) + P.field_int(qid_q + 1000)) in r111
+                 and (26, bytes([5, 6, 0, 6, 1])) in rdq and (27, bytes([5]) + P.field_int(cid_q) + P.field_int(qid_q)) in rdq
+                 and (22, bytes([5, 6, 0, 6, 1])) in rdc and (23, bytes([5]) + P.field_int(cid_q)) in rdc
+                 and (22, bytes([5, 6, 0, 6, 0, 5, 110]) + P.field_int(cid_q)) in r110
+                 and not _c.execute("SELECT 1 FROM quiz_categories WHERE id=?", (cid_q,)).fetchone())
+        op_s.sendall(q5(21, P.field_byte(0) + P.field_int(cid_v))); lire(op_s, 0.4)
+        # -- salon du groupe Quizz (fonction « chat » de la capture) : reserve a ses membres
+        op_s.sendall(P.build_frame(178, bytes([4]) + P.field_int(30) + P.field_str("questions pour samedi") + P.field_byte(0)))
+        jo.sendall(P.build_frame(178, bytes([4]) + P.field_int(30) + P.field_str("intrus") + P.field_byte(0)))
+        ro = frames(lire(op_s, 0.6)); rj = frames(lire(jo, 0.5))
+        verifier("panneau Quizz : salon du groupe 30 (op179 a ses membres), refuse a un joueur",
+                 (179, bytes([4]) + P.field_int(30) + P.field_int(pid_op) + P.field_str("questions pour samedi") + bytes([6, 0])) in ro
+                 and not any(o == 179 for o, _ in ro + rj if P.field_str("intrus") in _))
         _c.close(); jo.close(); op_s.close()
 
         import ffwtt_server as _SV
@@ -1067,15 +1225,29 @@ def main():
                  sorted(gd.cartes_du_plateau(1)) == [500, 600] and gd.cartes_du_plateau(0) == [],
                  f"{gd.cartes_du_plateau(1)} / {gd.cartes_du_plateau(0)}")
 
-        # regle « Totale » (6) : refusee tant que l'adversaire n'a pas l'experience voulue (op33 b0 v108)
+        # experience exigee des DEUX joueurs (seuils fixes par l'administrateur le 2026-10-22 : One 1000, Two 2000, Three
+        # 3000, Four 4000, Totale 5000, Directe / Change / Aleatoire 1000). Karl (3000) ne peut pas lancer « Totale » (6) :
+        # op33 b0 v107 ; Lena a 0 : « One » (2) refusee a cause d'elle (v108).
         _c = _sq4.connect(os.path.join(DOSSIER, BASE_TEST), timeout=10)
         _c.execute("UPDATE stats SET noto=0 WHERE pseudo_id=?", (pid_l - 1000,)); _c.commit(); _c.close()
-        defi_t = (b"\x03" + P.field_int(pid_l) + P.field_int16(2) + P.field_v(6) + P.field_int(0)
-                  + P.field_v(0) + P.field_byte(1))
-        karl.sendall(P.build_frame(32, defi_t))
-        p33 = next((pl for o, pl in frames(lire(karl, 0.8)) if o == 33), b"")
-        verifier("vainqueur : « Totale » refusee si l'adversaire manque d'experience (op33 b0 v108)",
-                 p33 == b"\x03" + P.field_int(pid_l) + bytes([6, 0, 5, 108]), p33.hex())
+        defi_r = lambda regle: (b"\x03" + P.field_int(pid_l) + P.field_int16(2) + P.field_v(regle) + P.field_int(0)
+                                + P.field_v(0) + P.field_byte(1))
+        karl.sendall(P.build_frame(32, defi_r(6)))
+        p33_t = next((pl for o, pl in frames(lire(karl, 0.8)) if o == 33), b"")
+        karl.sendall(P.build_frame(32, defi_r(2)))
+        p33_o = next((pl for o, pl in frames(lire(karl, 0.8)) if o == 33), b"")
+        verifier("vainqueur : experience insuffisante, « Totale » a 3000 (op33 b0 v107), « One » face a 0 (op33 b0 v108)",
+                 p33_t == b"\x03" + P.field_int(pid_l) + bytes([6, 0, 5, 107])
+                 and p33_o == b"\x03" + P.field_int(pid_l) + bytes([6, 0, 5, 108]), f"{p33_t.hex()} / {p33_o.hex()}")
+        verifier("vainqueur : seuils d'experience One 1000 ... Totale 5000, Directe / Change / Aleatoire 1000",
+                 _SV.EXP_REGLE == {2: 1000, 3: 2000, 4: 3000, 5: 4000, 6: 5000, 7: 1000, 8: 1000, 9: 1000}
+                 and not _SV.EXP_REGLE.get(0) and not _SV.EXP_REGLE.get(1))
+        class _Partie:
+            def main_de(self, cote): return [[11, 12, 13, 14, 15], [21, 22, 23, 24, 25]][cote]
+        tirages = [_SV.cartes_en_jeu(_Partie(), 0, _SV.ALEATOIRE, 4) for _ in range(200)]
+        verifier("vainqueur « Aleatoire » : UNE carte de la main du perdant tiree au sort, prise sans choix (0 a choisir)",
+                 all(n == 0 and len(c) == 1 and c[0] in range(21, 26) for n, c in tirages)
+                 and len({c[0] for _, c in tirages}) > 1, str(tirages[:3]))
         _c = _sq4.connect(os.path.join(DOSSIER, BASE_TEST), timeout=10)
         _c.execute("UPDATE stats SET noto=3000 WHERE pseudo_id=?", (pid_l - 1000,)); _c.commit(); _c.close()
 
@@ -1157,6 +1329,42 @@ def main():
         _c.close()
         verifier("vainqueur : la carte a vraiment change de collection", gagne and gagne["qty"] >= 1 and not perdu,
                  f"gagnant {gagne['qty'] if gagne else 0} / perdant {perdu['qty'] if perdu else 0}")
+
+        # « Aleatoire » (9), regle donnee par l'administrateur du serveur (2026-10-22) : comme One, mais le vainqueur ne
+        # choisit pas. UNE carte de la main du perdant, tiree au sort, passe directement au gagnant : ni op145 ni op149,
+        # op146 (gains) au gagnant et op147 (pertes) au perdant portent cette carte, puis op148.
+        defi9 = (b"\x03" + P.field_int(pid_l) + P.field_int16(2) + P.field_v(9) + P.field_int(0)
+                 + P.field_v(0) + P.field_byte(1))
+        g146 = []; p145a = []
+        for essai_a in range(4):
+            karl.sendall(P.build_frame(32, defi9)); lire(karl, 0.8); lire(lena, 0.5)
+            lena.sendall(P.build_frame(35, b"\x03" + P.field_int(pid_k) + P.field_byte(1)))
+            rk, rl = frames(lire(karl, 1.0)), frames(lire(lena, 1.0))
+            gid_a = next((champ_ints(pl)[-1] for o, pl in rk if o == 36), 0)
+            mains_a = {}
+            for qui, rr in (("K", rk), ("L", rl)):
+                m = next((pl for o, pl in rr if o == 135), b"")
+                mains_a[qui] = [struct.unpack_from("<H", m, i + 1)[0] for i in range(6, len(m), 3) if m[i] == 0x04]
+            partie_a = (gid_a << 8) | 3
+            for coup in range(9):
+                socks[coup % 2].sendall(P.build_frame(140, P.field_int(partie_a) + b"\x00"
+                                                      + P.field_v(coup // 2) + P.field_v(coup % 3) + P.field_v(coup // 3)))
+                rk += frames(lire(karl, 0.45)); rl += frames(lire(lena, 0.45))
+            rk += frames(lire(karl, 1.0)); rl += frames(lire(lena, 1.0))
+            pref = P.field_int(partie_a) + b"\x00"
+            g146 = [(qui, pl[len(pref):]) for qui, rr in (("K", rk), ("L", rl)) for o, pl in rr
+                    if o == 146 and pl.startswith(pref) and len(pl) > len(pref)]
+            p145a = [pl for rr in (rk, rl) for o, pl in rr if o == 145 and pl[:1] == bytes([3])]
+            if g146 or p145a: break
+            print(f"   (Aleatoire : match nul, essai {essai_a + 1} : on rejoue)")
+        qui_g = g146[0][0] if g146 else "?"
+        carte_a = struct.unpack_from("<H", g146[0][1], 1)[0] if g146 and len(g146[0][1]) == 3 else None
+        r_perdant = rl if qui_g == "K" else rk
+        p147a = [pl for o, pl in r_perdant if o == 147]
+        verifier("vainqueur « Aleatoire » : sans choix (pas d'op145), UNE carte de la main du perdant au gagnant (op146 = op147)",
+                 not p145a and len(g146) == 1 and carte_a in mains_a.get("L" if qui_g == "K" else "K", [])
+                 and p147a[:1] == [pref + P.field_int16(carte_a or 0)]
+                 and all(any(o == 148 for o, _ in rr) for rr in (rk, rl)), f"{g146} {p147a[:1]} {mains_a}")
         karl.close(); lena.close()
 
 

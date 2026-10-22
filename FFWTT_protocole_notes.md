@@ -148,8 +148,55 @@ la connexion suivante (aucun retrait de grade connu).
 | C→S | 178 ? (ctx4) | message du salon : **jamais observé** ; on accepte 178 et, à défaut, toute trame inconnue de forme `int(groupe) + str` (le journal signale l'opcode réel) |
 | S→C | 220–228 (ctx5) | quizz : 220 `int(pid) str(thèmes)` démarré · 221 `int(pid)` interrompu · 222 `[int(pid) int(points)]*` TOP 5 · 223 `str(thème) str(question)` · 224 `int(pid) int(points) str(réponse)` trouvé · 225 `str(réponse)` personne · 226 `int(pid)` remise à zéro · 228 `int(points)` mes points |
 | C→S | 227 (ctx5) / S→C 228 | `/points` : aucun champ / `05 int(points)` (« Vous avez %d point(s) sur le quizz actuel ») |
-| C→S | 21, 25, 29, 32, 35, 37, 40 (ctx5) | panneau Quizz du client (formats connus par `ffwtt_envois.py` : 21 `bs`/`bu` catégorie, 25 `buss`/`buu` question, 29 démarrer, 32 arrêter, 35 remise à zéro, 37 top 10, 40 `uu` questions d'une catégorie ; accusés 22, 26, 28, 30, 31/34/36/38, 39, 41, 42) : **pas branché**, le quizz se pilote par `!quiz demarrer [thème] · arreter · top · zero · points` |
-| C→S | 120 (ctx5) / S→C 121 | menu « Twitter » : sur l'original, une récompense (« Merci, votre compte a été crédité de %d gils ! ») ; pas branché |
+| C→S | 21, 25, 29, 32, 35, 37, 40 (ctx5) | panneau Quizz du client : voir ci-dessous. Le quizz se pilote aussi par le chat : `!quiz demarrer [thème] · arreter · top · zero · points` |
+| C→S | 120 (ctx5) / S→C 121 | menu « Twitter » : sur l'original, une récompense (« Merci, votre compte a été crédité de %d gils ! ») ; **abandonné** (décision de l'administrateur du serveur, 2026-10-22) : la requête est seulement journalisée |
+
+### Panneau Quizz du client (lu dans le binaire le 2026-10-22, jamais capturé)
+Le panneau est un `TfrmSpecialUser` comme le panneau d'équipe. La capture déclarait le groupe 30 « Quizz » (clé `quizz`) avec
+les fonctions `chat`, `topic` et `quizz`, et les grades 5 « Responsable des quizz » et 6 « Editeur ». La fonction `quizz`
+affiche **deux** onglets (comparaison par préfixe du nom du composant : `tabQuizz` « Questions des quizz » et
+`tabQuizzCurrent` « Quizz en cours »). Le serveur ouvre ce panneau par `op177(grade 5)` aux animateurs et aux opérateurs de
+niveau 3 et 4, avant toute fiche `op59`, comme le salon d'équipe.
+
+**Routage dans le client.** Les trames 20, 23, 24, 27, 28, 30, 33, 39 ne nomment pas de groupe : le client les applique au
+panneau de **chacun de ses grades** dont le groupe a `quizz` (liste remplie par `op61`, sans dédoublonnage), sans vérifier que
+le panneau existe. D'où trois règles : elles ne partent qu'aux connexions qui ont reçu `op177` (jamais par `broadcast`) ; un
+seul grade par groupe Quizz et un seul `op61` de ce grade (sinon tout s'affiche en double) ; elles partent **après** les
+`op61` (avant, le client ne connaît pas encore le grade et les ignore). 41 et 42 portent l'identifiant du groupe et lisent son
+panneau sans le vérifier non plus. Aucune requête ne vérifie de droit côté client : le serveur refuse avec 87.
+
+| Sens | op (ctx5) | Charge utile | Rôle |
+|---|---|---|---|
+| C→S | 21 | `b1 str(nom)` / `b0 int(catégorie)` | ajouter (nom saisi, `Trim`, peut être vide) / supprimer une catégorie (après confirmation) |
+| S→C | 22 | `b(ajout) b1` / `b(ajout) b0 v(code)` / code 110 : `+ int(catégorie)` | accusé (« La catégorie a été ajoutée / supprimée ») ; ne touche pas aux listes |
+| S→C | 20 | `int(id) str(nom) int(nombre de questions)` | ajoute une catégorie aux deux listes (jamais dédoublonnée) |
+| S→C | 28 | — | fin de la liste : chaque ligne devient « Nom [n question(s)] », « Liste des quizz reçue » dans le chat |
+| S→C | 23 | `int(catégorie)` | retire une catégorie |
+| C→S | 25 | `b1 int(cat) str(question) str(réponse)` / `b0 int(cat) int(question)` | ajouter / supprimer une question ; **« Éditer » envoie la suppression puis l'ajout** |
+| S→C | 26 | comme 22 ; codes 110 et 111 : `+ int(numéro)` | accusé (« La question a été ajoutée / supprimée ») |
+| S→C | 24 | `int(question) int(cat) str(question) str(réponse) str(auteur) int(date Unix)` | ajoute une question (compteur + 1 ; ligne affichée si la catégorie est sélectionnée) |
+| S→C | 27 | `int(cat) int(question)` | retire une question |
+| C→S | 40 | `int(groupe) int(cat)` | questions d'une catégorie, envoyé seulement si le nombre en cache diffère du nombre annoncé |
+| S→C | 41 | `int(groupe) int(cat) x(texte)` | fiches `id#10question#10réponse#10auteur#10date` collées par `#10` (**les 3 caractères**, pas un saut de ligne) ; parties vides ignorées, trame ignorée si leur nombre n'est pas multiple de 5 ; texte décompressé ≤ 65 535 octets (longueur sur 16 bits) : plusieurs 41 s'accumulent |
+| S→C | 42 | `b1 int(groupe) int(cat)` / `b0 v(code)` | fin de la liste ; **seul `b1` débloque le panneau** (grisé depuis la sélection) |
+| C→S | 29 | `int(temps de réponse) int(temps entre les questions) int(cat)*` | démarrer (défauts 45 et 15 ; bornés à 5–300 s par le client à la sortie du champ seulement) |
+| S→C | 30 | `int(temps de réponse) int(temps entre les questions) int(cat)*` | quizz en cours : bouton Arrêter actif, catégories cochées |
+| S→C | 33 | — | quizz arrêté : **seule trame qui rend le bouton Démarrer** (y compris à la fin naturelle) |
+| C→S | 32 / 35 / 37 | — | arrêter / remettre les points à zéro / « Afficher le top5 actuel » |
+| S→C | 31 / 34 / 36 / 38 | `b1` / `b0 v(code)` | accusés de 29 / 32 / 35 / 37 (« Vous avez démarré le quizz »…) ; ne changent aucun bouton |
+| S→C | 39 | `[int(pid) int(points)]*` | remplace la liste des points ; rang dans l'ordre reçu (ex aequo au même rang), pids inconnus ignorés |
+
+Codes : 109 « La catégorie existe déjà ! », 110 « Catégorie %d inexistante », 111 « Question %d inexistante », 112 « Cette
+catégorie est en cours d'utilisation… », 113 « Il n'y a pas de quizz en cours actuellement », 114 « Un quizz est déjà en
+cours », 115 « Aucune catégorie avec des questions sélectionnée », 87 droits, 0 « Erreur inconnue ». **Un code dont le message
+attend un nombre, envoyé sans lui, provoque une « Erreur fatale » du client** : 110/111 seulement dans 22 et 26, avec l'entier.
+
+Choix du serveur (non déterminés par le client) : questions en base (`quiz.json` importé une seule fois, sur une base neuve) ;
+plusieurs réponses acceptées séparées par `|` dans le champ « Réponse » (la première est annoncée) ; textes vides, trop longs
+(catégorie 40, question 250, réponse 100) ou contenant `#10` refusés par le code 0 ; ni ajout ni suppression dans une
+catégorie utilisée par le quizz en cours (112 : « Éditer » ajouterait sinon un doublon) ; le panneau lance toutes les
+questions des catégories cochées (`!quiz` en tire 15) ; 37 diffuse le top 5 (`op222`) à tout le salon ; `op28` n'est envoyé
+qu'à l'entrée au salon (le libellé « [n question(s)] » n'est donc pas rafraîchi en cours de session).
 
 ### Profil
 | Sens | op | Rôle |
@@ -267,11 +314,18 @@ inversés, notamment) :
 | 6 | Totale | les 5 cartes de la main du perdant (le client exige « plus de 10 cartes », erreurs 103 / 104) |
 | 7 | Directe | « les joueurs remportent les cartes qu'ils ont retournées au cours de la partie » (définition donnée par l'utilisateur, joueur de l'époque) : **les deux joueurs**, vainqueur ou non, match nul compris, gardent les cartes adverses qu'ils détiennent à la fin. L'origine de chaque carte est le 4ᵉ élément de la case du plateau (`ffwtt_regles`), conservé par les retournements et les déplacements |
 | 8 | Change | « le vainqueur remporte le nombre de cartes équivalant à la différence de points » (même source ; 8 à 2 → 6), au plus les 5 cartes engagées : le panneau « Choisissez vos gains » du client est dessiné pour 5 cartes |
-| 9 | Aléatoire | le serveur tire le nombre de cartes (1 à 5), le vainqueur choisit (**déduit**) |
+| 9 | Aléatoire | comme One, mais le vainqueur ne choisit pas : **une seule carte** de la main du perdant, tirée au sort par le serveur et prise directement (pas d'`op145`) ; définition donnée par l'administrateur du serveur le 2026-10-22 |
 
-Les seuils d'expérience par règle (« Un certain nombre d'expérience est maintenant requis pour utiliser chaque règle
-du vainqueur », journal des versions, build 5620) sont perdus : ce serveur en fixe (`EXP_REGLE`), refus par
-`op33 b0 v107` (moi) / `v108` (l'adversaire). La **mise en gils** est prélevée à l'acceptation (op35) et le gagnant
+**Expérience requise par règle** (« Un certain nombre d'expérience est maintenant requis pour utiliser chaque règle du
+vainqueur », journal des versions, build 5620). Les seuils d'origine sont perdus : le client ne les contient pas
+(`TfrmRules.FormCreate` propose les dix règles sans condition ; les messages 107 / 108 ne portent aucun nombre, vérifié le
+2026-10-22). Seuils de ce serveur (`EXP_REGLE`, fixés par son administrateur le 2026-10-22), exigés des **deux** joueurs :
+
+| Règle | Entraînement, Aucune | One | Two | Three | Four | Totale | Directe | Change | Aléatoire |
+|---|---|---|---|---|---|---|---|---|---|
+| Expérience | — | 1000 | 2000 | 3000 | 4000 | 5000 | 1000 | 1000 | 1000 |
+
+Refus par `op33 b0 v107` (moi) / `v108` (l'adversaire). La **mise en gils** est prélevée à l'acceptation (op35) et le gagnant
 récupère le double (nul = remboursé). Contre un robot, aucun enjeu : la règle est ramenée à « Aucune ».
 
 **Le choix des gains** (formats lus dans les gestionnaires du client, jamais capturés) :
@@ -450,8 +504,8 @@ gestionnaire : `04 b0 v(12) int(n)` affiche « *** ID %d inexistant » avec `n`,
 
 | C→S (lu dans le binaire) | Charge utile | Permission | Réponse |
 |---|---|---|---|
-| 202 « Arrêter la partie » (onglet Parties, `TfrmListGames.mnuEndGameClick`) | `int(numéro de partie)` (celui d'`op232`) | `stopgame` | `op203 04 b1` ; joueurs : `op144 … v(2) int(pid de l'opérateur)` (« *** L'opérateur %s a arrêté la partie », gestionnaire `0x645189`, commun aux joueurs et aux spectateurs), `op235 b0`, `op146`/`op147` vides, `op148` ; spectateurs : `op144` motif 2 ; autres : `op235 b0`. Ni statistique ni enjeu, mises rendues. Partie inconnue : `op203 04 b0 v(12) int(numéro)` |
-| 223 `/moderate` | — | `moderatemode` | `op224 04 b1 b(actif)` (« Activation / Désactivation du mode modéré acceptée par le serveur ») ; **`op82` catégorie 1 `01 b(actif)` à tous** (« *** Le mode modéré a été activé / désactivé », gestionnaire `0x640479` ; le client mémorise l'état et ne montre plus les absences / retours). Chat public refusé sans `talkwhilemoderate` (aucun code d'erreur prévu : message non diffusé). `op225 int(pid) b` = ligne du journal des actions spéciales du panneau d'équipe (fonction `specialactions`, non envoyée) |
+| 202 « Arrêter la partie » (onglet Parties, `TfrmListGames.mnuEndGameClick`) | `int(numéro de partie)` (celui d'`op232`) | `stopgame` | `op203 04 b1` ; joueurs : `op144 … v(2) int(pid de l'opérateur)` (« *** L'opérateur %s a arrêté la partie », gestionnaire `0x645189`, commun aux joueurs et aux spectateurs), `op235 b0`, `op146`/`op147` vides, `op148` ; spectateurs : `op144` motif 2 ; autres : `op235 b0`. Ni statistique ni enjeu, mises rendues. Partie inconnue : `op203 04 b0 v(12) int(numéro)`. **Vu en jeu le 2026-10-22** : fonctionne, l'écran de jeu des joueurs affiche « Égalité » |
+| 223 `/moderate` | — (le client exige **zéro** paramètre : `Length(paramètres) = 0`, `0x65D956` ; `/moderate on` est refusé par le client lui-même, « *** Nombre de paramètres incorrects », sans rien envoyer) | `moderatemode` | `op224 04 b1 b(actif)` (« Activation / Désactivation du mode modéré acceptée par le serveur ») ; **`op82` catégorie 1 `01 b(actif)` à tous** (« *** Le mode modéré a été activé / désactivé », gestionnaire `0x640479` ; le client mémorise l'état et ne montre plus les absences / retours). Chat public refusé sans `talkwhilemoderate` (aucun code d'erreur prévu : message non diffusé). `op225 int(pid) b` = ligne du journal des actions spéciales du panneau d'équipe (fonction `specialactions`, non envoyée) |
 | 176 `/ident <groupe> <mot de passe>` | `str str` | — | `op177 04 b0 v(code)` : 83 « Groupe ou mot de passe incorrect », 86 « Vous êtes déjà membre de ce groupe d'utilisateurs spéciaux » (l'équipe vient ici du niveau du compte) |
 
 **Panneau d'équipe : topic et caisse de gils** (lus dans le client le 2026-10-12, jamais capturés). Les onglets du panneau
@@ -490,15 +544,15 @@ jamais dans les branches des catégories 0 à 3. Avant, seule la catégorie 4 l'
 lançait un duel contre un robot, « Remise à zéro des points » (ctx5 op35) passait pour une réponse à un défi, et
 l'enregistrement des notes personnelles (ctx6 op64) pour une ouverture de profil. Inventaire des 82 requêtes du client :
 `py ffwtt_envois.py`. Avant le 2026-10-12, 61 avaient une vraie réponse (un croisement par numéro d'opcode en comptait
-64 : ces trois-là y passaient à tort pour traitées) ; 73 depuis. Les 9 restantes : ctx4 178 (salon, traité par
-approximation) ; ctx5 21, 25, 29, 32, 35, 37, 40, 120.
+64 : ces trois-là y passaient à tort pour traitées) ; 73 depuis, 80 depuis le panneau Quizz (2026-10-22). Les 2
+restantes : ctx4 178 (salon, traité par approximation) et ctx5 120 (menu Twitter, abandonné).
 
 ### News rapides (catégorie 6)
 | Sens | op | Rôle |
 |------|----|------|
 | C→S | 164 (ctx6) | `/quicknews [texte]` « Change les news rapides » : `06 str(texte)` (permission `quicknews`) |
 | S→C | 165 (ctx6) | accusé `06 b1` (silencieux), ou `06 b0 v(code)` |
-| S→C | 166 (ctx6) | `06 str(texte)` → « *** Infos : %s » dans le salon. **C'est aussi la trame du message d'accueil** (observé après `op62`). La news rapide est diffusée quand elle change et rappelée à l'entrée, après le message d'accueil |
+| S→C | 166 (ctx6) | `06 str(texte)` → « *** Infos : %s » dans le salon. **C'est aussi la trame du message d'accueil** (observé après `op62`). La news rapide est diffusée quand elle change et rappelée à l'entrée, après le message d'accueil. **Vu en jeu le 2026-10-22** (`/quicknews BONJOUR` → « *** Infos : BONJOUR ») |
 
 **Permissions** nommées, transmises par les grades (op87) : `viewaccount`, `viewhost`,
 `viewemail`, `viewoffinfos`, `global`, `stopgame`, `spygame`, `moderatemode`,
@@ -562,7 +616,8 @@ host et e-mail qu'au propriétaire ou à qui a `viewaccount`, `viewhost`, `viewe
 op242 `int(pid)`) et `/offinfos <pseudo>` (ctx4 op215 `str`). Réponse : le profil `op65` du joueur, connecté ou non, d'après
 la base, puis sa note (`op241`). Erreur : `op216 04 v(code)` (le gestionnaire `0x64E235` n'affiche qu'une erreur : 87
 privilèges, 9 pseudo inexistant). La réponse positive est déduite du client (rien de capturé) : `op216` n'a pas de branche
-de réussite, et `op243` (242 + 1) est en réalité la liste « actions en cours » du panneau d'équipe.
+de réussite, et `op243` (242 + 1) est en réalité la liste « actions en cours » du panneau d'équipe. **Vu en jeu le
+2026-10-22** : `/offinfos <pseudo>` affiche bien le profil.
 
 ---
 
@@ -605,7 +660,7 @@ Plateau 3×3. Côtés d'une carte : Haut, Droite, Bas, Gauche (A = 10).
 | 36 | `int(adversaire) + b(1) + b(choix) + int(n° de partie)` : `b(choix)=1` ouvre « Jeu avec %s – Choix des cartes » (binaire, cas 804), 0 ouvre le plateau |
 | 133 / 134 | C→S `int(partie) + 5 × int16(carte)` / S→C `int(partie) + b(1)` « Cartes acceptées par le serveur » |
 | 137 | Élémentaire : 9 × `v(élément)` (0 = aucun) |
-| 138 | Mur puissant : 9 × `int16(nombre) + v(type) + v(orientation)` ; type 1 = `+`, 2 = `-` (3 = `=` par élimination) ; orientation 1 = la ligne glisse, 0 = la colonne |
+| 138 | Mur puissant : 9 × `int16(nombre) + v(type) + v(orientation)` ; type 1 = `+`, 2 = `-`, 3 = `=` (symboles que le client dessine, `0x6572AA`, lu le 2026-10-22) ; orientation 1 = la ligne glisse, 0 = la colonne |
 | 136 | main adverse : 5 × `int16` ; `0x1316` = dos de carte, ou les vraies cartes en Open (déduit : même gestionnaire que op135) |
 | 142 | carte posée : coordonnées **de pose** (avant déplacement) |
 | 143 | `b(déplacement)` ; si 1 : `b(axe : 1 colonne, 0 ligne) + v(indice) + v(sens : 0 observé = vers l'indice 0) + int16(1)` ; puis les retournements `v(x) v(y) int(pid du nouveau propriétaire) v(type)` en coordonnées **après** déplacement ; puis `v(score du destinataire)`. Types : **1 normal (et Bataille), 2 Identique, 3 Plus** |

@@ -1,4 +1,7 @@
-<img width="402" height="217" alt="splash" src="https://github.com/user-attachments/assets/d08d05c9-43f4-487a-b823-90dcb4d46ea8" />
+<p align="center">
+  <img width="402" height="217" alt="splash" src="https://github.com/user-attachments/assets/d08d05c9-43f4-487a-b823-90dcb4d46ea8" />
+  <img width="380" height="217" alt="Une partie en cours" src="docs/plateau.png" />
+</p>
 
 # Serveur FFWorld Triple Triad
 
@@ -204,7 +207,7 @@ appartiennent au **compte** : tous ses pseudos jouent avec la même collection.
 | `ffwtt_images.py` | logos des grades et des notoriétés |
 | `cartes.json` | la table des 4884 cartes (nom, deck, niveau, valeurs, élément), lue dans le client |
 | `ffwtt_cards_build.py` | reconstruit `cartes.json` depuis un jeu installé |
-| `motd.txt`, `motd_en.txt`, `quiz.json` | message d'accueil (français, anglais) et questions du quizz |
+| `motd.txt`, `motd_en.txt`, `quiz.json` | message d'accueil (français, anglais) et questions de départ du quizz |
 | `FFWTT_protocole_notes.md` | la spécification du protocole |
 | `test_serveur.py`, `test_regles.py` | les tests |
 
@@ -217,6 +220,11 @@ bannir (pseudo, compte, adresse), nouveau deck, remise à zéro, notoriété, me
 joueur déconnecté. Commandes de l'équipe : `/moderate` (mode modéré), `/quicknews texte` (news affichée à tous),
 `/ident`, `/points`, `/dissolve "Guilde" raison`. Le salon des opérateurs s'ouvre à leur connexion, avec son topic et sa
 caisse de gils (`/putspegils`, `/takespegils`, `/gengils staff montant`).
+
+Le **panneau Quizz** du client s'ouvre aux animateurs et aux opérateurs de niveau 3 et 4 : catégories et questions
+(ajout, suppression, édition), lancement d'un quizz sur les catégories cochées avec le temps de réponse et la pause
+choisis, arrêt, remise à zéro et classement des points. Les questions sont en base ; celles de `quiz.json` y sont
+importées au premier démarrage. Dans le champ « Réponse », plusieurs réponses acceptées se séparent par `|`.
 
 Hors ligne (serveur arrêté, pour ne pas bloquer la base) :
 
@@ -270,17 +278,22 @@ py test_serveur.py
 `test_regles.py` rejoue coup par coup une partie réelle (Élémentaire, Bataille, Identique, Plus, Même mur, Mur
 additionnel, Mur puissant) et vérifie chaque retournement. `test_serveur.py` démarre un serveur sur une base jetable et
 rejoue tout le protocole, de la connexion aux enchères, y compris les attaques connues (compter cinq minutes) ; il doit
-afficher **181/181**. À lancer après toute modification.
+afficher **205/205**. À lancer après toute modification.
 
 ## État du projet
 
+Les changements de chaque version sont dans le [journal des modifications](CHANGELOG.md).
+
 Le jeu est complet. Ce qui manque ou n'a pas été vérifié :
 
-- **sans réponse** : le panneau Quizz du client (le quizz fonctionne par `!quiz` dans le chat) et le menu Twitter ;
-- **jamais vu dans le vrai client** : les guildes, l'arrêt de partie, le mode modéré, les news rapides, le topic et la
-  caisse du salon des opérateurs, les infos hors ligne ;
-- **déduit, jamais observé** : la création de pseudo, la règle du vainqueur « Aléatoire », les seuils d'expérience des
-  règles, la restriction « = » du Mur puissant.
+- **laissé de côté** : le menu Twitter du client (une récompense en gils sur l'original) ;
+- **jamais vu dans le vrai client** : les guildes, le panneau Quizz, le mode modéré, le topic et la caisse du salon des
+  opérateurs ;
+- **déduit, jamais observé** : la création de pseudo ;
+- **choix de ce serveur**, faute de trace de l'original (ni le client ni le journal des versions du jeu ne les
+  contiennent) : la règle du vainqueur « Aléatoire » prend **une** carte du perdant tirée au sort, et chaque règle à
+  enjeu exige de l'expérience aux deux joueurs : 1000 pour One, Directe, Change et Aléatoire, 2000 pour Two, 3000 pour
+  Three, 4000 pour Four, 5000 pour Totale (`EXP_REGLE`).
 
 La spécification (`FFWTT_protocole_notes.md`) indique, trame par trame, ce qui a été observé et ce qui a été déduit. Les
 contributions sont bienvenues : lancez les deux tests avant de proposer une modification, et ne donnez jamais un format

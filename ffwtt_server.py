@@ -316,7 +316,10 @@ GROUPES = [
     (GROUPE_PROF,  "Enseignants", "$prof", 760886,   []),
     (GROUPE_ROBOT, "Robot", "bot", 2579545, []),               # section « Robot » de la liste : APRES l'equipe
     (GROUPE_ANGLO, "English speakers", "en", 11161630, []),   # puis les anglophones (bleu), avant les joueurs sans grade
-    (GROUPE_QUIZZ, "Quizz",       "quizz", 8421504,  []),     # pas de panneau (ses commandes sont inconnues)
+    # Le groupe « Quizz » a son propre panneau, avec les fonctions de la capture : « quizz » affiche les onglets
+    # « Questions des quizz » et « Quizz en cours » (prefixe : tabQuizz, tabQuizzCurrent), « chat » et « topic » ceux du
+    # salon et du topic du groupe. Ouvert par op177 avec le grade 5 (trames_ouverture_salon), avant toute fiche op59.
+    (GROUPE_QUIZZ, "Quizz",       "quizz", 8421504,  ["chat", "topic", "quizz"]),
 ]
 # L'ORDRE COMPTE : c'est lui qui classe la liste des joueurs. Le client donne a chaque joueur un poids
 # « nombre de grades - rang de son meilleur grade » (fonctions 0x635298 / 0x635330 : il parcourt les grades du
@@ -344,6 +347,8 @@ GRADES = [
 ]
 # niveau d'administration du compte (0-4) -> grade d'operateur
 NIVEAU_VERS_GRADE = {1: 11, 2: 12, 3: 13, 4: 14}
+GRADE_QUIZZ = 5           # « Responsable des quizz » (groupe GROUPE_QUIZZ) : le panneau Quizz
+NIVEAU_QUIZZ = 3          # operateurs qui pilotent le quizz (comme les animateurs), panneau ou commande !quiz
 # categories de notoriete : (id, libelle, seuil de l'etoile = maximum du curseur d'edition).
 # Les VALEURS des fiches sont positionnelles (la i-eme valeur va a la i-eme categorie recue : le
 # gestionnaire d'op59 lit « Count » valeurs et prend la categorie par son rang) ; l'id ne sert qu'au
@@ -353,15 +358,19 @@ NOTORIETES = [(1, "Tournois", 1000), (2, "Animations", 1000), (3, "Quizz", 1000)
 NOTO_QUIZZ, NOTO_DUELS = 2, 3          # RANGS (et non ids) dans la liste ci-dessus
 
 def grades_de(niveau, anim=False, langue="fr"):
-    """Tous les grades d'un compte : operateur (+ salon), animateur (+ quizz), anglophone.
+    """Tous les grades d'un compte : operateur (+ salon), animateur, responsable des quizz, anglophone.
     Chaque grade donne au joueur lui-meme passe par op61, et le client ecrit a chaque fois « *** X est maintenant
     un(e) <grade> » dans le chat (gestionnaire 0x63D825 : affichage inconditionnel, rien dans la trame ne permet
     de le taire). On ne donne donc que les grades utiles : un operateur de niveau 4 a deja toutes les permissions
-    de l'animateur et du responsable des quizz, il ne les recoit plus en double (4 lignes a chaque connexion -> 2)."""
+    de l'animateur, il ne recoit pas son grade. Le grade 5 « Responsable des quizz », lui, ouvre le panneau Quizz : les
+    trames du panneau ne passent que par un grade du groupe Quizz (voir react_quizz). Animateurs et operateurs de
+    niveau 3 et 4 le recoivent, UNE fois : chaque grade d'un groupe a « quizz » fait traiter les trames du panneau
+    une fois de plus par le client (categories et questions en double)."""
     g = []
     if NIVEAU_VERS_GRADE.get(niveau): g.append(NIVEAU_VERS_GRADE[niveau])
     if niveau: g.append(3)
-    if anim: g += [21, 5]
+    if anim: g.append(21)
+    if anim or niveau >= NIVEAU_QUIZZ: g.append(GRADE_QUIZZ)
     if langue == "en": g.append(GRADE_ANGLO)      # un operateur anglophone reste range chez les operateurs (meilleur rang)
     return g
 
@@ -533,9 +542,12 @@ ENTRAINEMENT, AUCUNE, TOTALE, DIRECTE, CHANGE, ALEATOIRE = 0, 1, 6, 7, 8, 9
 CHOIX_CARTES = {2: 1, 3: 2, 4: 3, 5: 4}
 REGLES_ENJEU = set(CHOIX_CARTES) | {TOTALE, DIRECTE, CHANGE, ALEATOIRE}
 # « Un certain nombre d'experience est maintenant requis pour utiliser chaque regle du vainqueur » (journal des
-# versions du jeu, build 5620) ; les seuils exacts sont perdus. Ceux-ci sont un CHOIX de ce serveur (l'experience
-# a ete multipliee par dix en 3.3). Refus : op33 b0 v107 (moi) ou v108 (l'adversaire).
-EXP_REGLE = {2: 250, 3: 500, 4: 750, 5: 1000, TOTALE: 2000, DIRECTE: 500, CHANGE: 1000, ALEATOIRE: 250}
+# versions du jeu, build 5620) ; les seuils exacts sont perdus : le client ne les contient pas (sa fenetre des regles,
+# TfrmRules.FormCreate 0x6226DC, propose les dix regles sans condition, et ses refus 107 / 108 ne portent aucun nombre,
+# verifie le 2026-10-22). Seuils fixes par l'administrateur du serveur le 2026-10-22 : One 1000, Two 2000, Three 3000,
+# Four 4000, Totale 5000, Directe, Change et Aleatoire 1000 (Entrainement et Aucune : aucun).
+# Refus : op33 b0 v107 (moi) ou v108 (l'adversaire).
+EXP_REGLE = {2: 1000, 3: 2000, 4: 3000, 5: 4000, TOTALE: 5000, DIRECTE: 1000, CHANGE: 1000, ALEATOIRE: 1000}
 DELAI_CHOIX = 90          # secondes laissees au vainqueur pour choisir ses gains
 CLIENTS = {}    # id(conn) -> {"conn":..., "pid":..., "name":...}  (joueurs en ligne)
 ACCUEIL_URL = ""    # URL d'accueil (op81) ; VIDE par defaut : evite l'ecran de CGU du client
@@ -1275,10 +1287,12 @@ def cartes_en_jeu(game, cote_gagnant, regle, ecart):
     perdant = 1 - cote_gagnant
     if regle == TOTALE:   return 0, game.main_de(perdant)
     if regle == DIRECTE:  return 0, game.cartes_du_plateau(perdant)
+    if regle == ALEATOIRE:                                    # « Aleatoire » : comme One, mais le vainqueur ne choisit
+        main = game.main_de(perdant)                          # pas : UNE carte du perdant tiree au sort (regle donnee
+        return 0, [random.choice(main)] if main else []       # par l'administrateur du serveur, 2026-10-22)
     if regle in CHOIX_CARTES: n = CHOIX_CARTES[regle]
-    elif regle == CHANGE: n = max(1, min(5, ecart))          # « Change » : l'ecart de score (8-2 -> 6), au plus les 5
+    else:                 n = max(1, min(5, ecart))          # « Change » : l'ecart de score (8-2 -> 6), au plus les 5
                                                               # cartes engagees (le panneau du client n'en montre que 5)
-    else:                 n = random.randint(1, 5)           # « Aleatoire » : le serveur tire le nombre
     return n, game.main_de(perdant)
 
 def echanger_cartes(game, gains):
@@ -1322,7 +1336,7 @@ def regler_enjeu(game, cote_force=None):
     cote = cote_force if cote_force is not None else (0 if a > b_ else 1)
     n, cartes = cartes_en_jeu(game, cote, regle, abs(a - b_))
     if not cartes: return False
-    if not n:                                                 # Totale : rien a choisir
+    if not n:                                                 # Totale, Aleatoire : rien a choisir
         transferer_cartes(game, cote, cartes)
         return False
     n = min(n, len(cartes))
@@ -1708,8 +1722,8 @@ def react_admin(conn, op, payload, sess, moi):
 #   225 str(reponse)           « Personne n'a trouve la reponse qui etait "%s" »
 #   226 int(pid)               « %s a remis les points a zero »
 #   228 int(points)            « Vous avez %d point(s) sur le quizz actuel »
-# Les commandes du panneau Quizz du client (C->S) n'ont jamais ete observees : le quizz se pilote
-# par le chat (!quiz demarrer [theme] | arreter | top | zero | points), reserve aux animateurs.
+# Le quizz se pilote par le panneau Quizz du client (lu dans le binaire le 2026-10-22 : react_quizz) ou par le chat
+# (!quiz demarrer [theme] | arreter | top | zero | points), reserve aux animateurs et aux operateurs de niveau 3 et 4.
 # ===========================================================================
 def membres_du_groupe(groupe):
     """Connexions des joueurs en ligne qui ont un grade dans ce groupe."""
@@ -1723,14 +1737,20 @@ def ligne_salon(groupe, pid, texte, action=0):
 
 GRADE_SALON = 3          # le grade « membre du salon des operateurs » (groupe GROUPE_EQUIPE)
 
+PANNEAUX = [(GROUPE_EQUIPE, GRADE_SALON), (GROUPE_QUIZZ, GRADE_QUIZZ)]     # (groupe, grade envoye par op177)
+
 def trames_ouverture_salon(sess):
     """op177 = b(1) + int(GRADE) — et non le groupe : le client cherche le grade, affiche « Vous
     faites maintenant partie de la categorie <libelle du grade> » et cree le panneau de son
-    groupe. Un identifiant qui n'est pas un grade = « Access violation at 00649EF3, read of 14 »."""
-    if GRADE_SALON not in grades_de(sess.get("admin", 0), sess.get("anim", 0)): return []
-    sess["panneaux"] = {GROUPE_EQUIPE}               # ce client a le panneau : il peut recevoir op211 / op231
-    return ([P.build_frame(177, bytes([4]) + P.field_byte(1) + P.field_int(GRADE_SALON))]
-            + trames_etat_panneau(GROUPE_EQUIPE))
+    groupe. Un identifiant qui n'est pas un grade = « Access violation at 00649EF3, read of 14 ».
+    Un panneau par groupe : le salon des operateurs (grade 3) et le Quizz (grade 5)."""
+    mes_grades = grades_de(sess.get("admin", 0), sess.get("anim", 0))
+    out = []; sess["panneaux"] = set()
+    for groupe, grade in PANNEAUX:
+        if grade not in mes_grades: continue
+        sess["panneaux"].add(groupe)                 # ce client a le panneau : il peut recevoir op211 / op231 / op20...
+        out += [P.build_frame(177, bytes([4]) + P.field_byte(1) + P.field_int(grade))] + trames_etat_panneau(groupe)
+    return out
 
 # ---------------------------------------------------------------------------
 # CAISSE DE GILS ET TOPIC DU PANNEAU D'EQUIPE (lus dans le client le 2026-10-12, jamais captures).
@@ -1849,10 +1869,17 @@ def message_salon(conn, moi, groupe, texte, action=0):
     log(f"    SALON {groupe} <{moi['name']}> {texte!r}")
 
 # ------------------------------- quizz -------------------------------------
-QUIZ = {"actif": False, "points": {}, "question": None, "echeance": 0, "par": 0, "themes": [], "pioche": []}
+# Questions en base (ffwtt_db : quiz_categories, quiz_questions), gerees depuis le panneau Quizz du client
+# (react_quizz) ; quiz.json n'est lu qu'a la premiere mise en route (importer_quiz). Le quizz se lance du panneau
+# (temps de reponse et pause choisis par l'animateur) ou par le chat (!quiz, temps QUIZ_DELAI / QUIZ_PAUSE).
+QUIZ = {"actif": False, "points": {}, "question": None, "echeance": 0, "par": 0, "themes": [], "categories": [],
+        "pioche": [], "delai": 30, "pause": 6}
 QUIZ_VERROU = threading.Lock()
-QUIZ_DELAI = 30           # secondes pour repondre
-QUIZ_PAUSE = 6            # secondes entre deux questions
+QUIZ_DELAI = 30           # secondes pour repondre (commande !quiz ; le panneau envoie les siennes, 45 par defaut)
+QUIZ_PAUSE = 6            # secondes entre deux questions (!quiz ; 15 par defaut dans le panneau)
+QUIZ_QUESTIONS = 15       # questions tirees par !quiz ; le panneau lance toutes celles des categories cochees
+QUIZ_LONGUEURS = {"categorie": 40, "question": 250, "reponse": 100}
+QUIZ_FICHES_MAX = 60000   # texte d'une trame op41, decompresse : le client range sa longueur sur 16 bits
 
 def _sans_accents(s):
     import unicodedata
@@ -1866,14 +1893,103 @@ def charger_quiz(chemin="quiz.json"):
     except Exception as e:
         log(f"    !! quiz.json illisible : {e}"); return {}
 
+def texte_quiz(s, longueur):
+    """Nom de categorie, question ou reponse nettoye, ou "" s'il est refuse : vide, trop long, ou contenant « #10 ».
+    « #10 » (les 3 caracteres) separe les champs des fiches d'op41 : le client y couperait le texte, decalerait les
+    fiches suivantes et, selon le cas, planterait (identifiant ou date non numerique)."""
+    s = " ".join(str(s).split()).encode("latin1", "replace").decode("latin1")
+    return s if s and len(s) <= longueur and "#10" not in s else ""
+
+def lire_reponses(texte):
+    """Champ « Reponse » du panneau : les reponses acceptees separees par « | » (choix du serveur : le panneau n'a qu'un
+    champ et quiz.json en donne plusieurs). La premiere est celle que le quizz annonce. [] si l'une est refusee."""
+    morceaux = [m for m in (" ".join(x.split()) for x in str(texte).split("|")) if m]
+    reponses = [texte_quiz(m, QUIZ_LONGUEURS["reponse"]) for m in morceaux]
+    return reponses if reponses and all(reponses) else []
+
+def affichage_reponses(reponses): return " | ".join(reponses)
+
+def importer_quiz(chemin="quiz.json"):
+    """Premiere mise en route : chaque theme de quiz.json devient une categorie du panneau Quizz. Une seule fois
+    (reglage « quiz_importe ») : une categorie supprimee depuis le panneau ne revient pas au redemarrage."""
+    if db.reglage("quiz_importe") or db.quiz_categories() or not os.path.exists(chemin): return
+    n = 0
+    for theme, questions in charger_quiz(chemin).items():
+        nom = texte_quiz(theme, QUIZ_LONGUEURS["categorie"])
+        cid = db.quiz_creer_categorie(nom) if nom else None
+        if not cid: continue
+        for q in questions:
+            question = texte_quiz(q.get("q", ""), QUIZ_LONGUEURS["question"])
+            reponses = lire_reponses("|".join(q.get("r", [])))
+            if question and reponses:
+                db.quiz_ajouter_question(cid, question, reponses, "quiz.json", int(time.time())); n += 1
+    db.definir_reglage("quiz_importe", "1")
+    log(f"    quizz : {n} question(s) importee(s) de {chemin}")
+
 def _diffuser5(op, corps): broadcast(P.build_frame(op, bytes([5]) + corps))
+
+def _quiz5(op, corps=b""): return P.build_frame(op, bytes([5]) + corps)
+
+def pilote_quiz(sess):
+    """Animateurs et operateurs de niveau 3 et 4 : ceux qui ont le grade 5 (et donc le panneau Quizz)."""
+    return GRADE_QUIZZ in grades_de(sess.get("admin", 0), sess.get("anim", 0))
+
+def quiz_aux_responsables(trame):
+    """Les trames d'etat du panneau Quizz (op20, 23, 24, 27, 30, 33, 39) n'identifient pas le groupe : le client les
+    applique au panneau de chacun de ses grades du groupe Quizz, sans verifier qu'il existe. Elles ne partent donc
+    qu'aux connexions qui ont recu op177 (sess["panneaux"]), jamais par broadcast."""
+    aux_membres_panneau(GROUPE_QUIZZ, trame)
+
+def trame_quiz_points():
+    """op39 [int(pid) int(points)]* : remplace la liste de l'onglet « Quizz en cours ». Le client numerote dans l'ordre
+    recu (ex aequo au meme rang) : du plus au moins de points. Les joueurs partis ne sont pas envoyes."""
+    corps = b""
+    for pid, pts in sorted(QUIZ["points"].items(), key=lambda kv: -kv[1]):
+        if find_client(pid): corps += P.field_int(pid) + P.field_int(pts)
+    return _quiz5(39, corps)
+
+def trame_quiz_etat():
+    """op30 int(temps de reponse) int(temps entre les questions) int(categorie)* : quizz en cours (bouton « Arreter »
+    actif, categories cochees, temps affiches) ; op33 : quizz arrete (seule trame qui rend le bouton « Demarrer »)."""
+    if not QUIZ["actif"]: return _quiz5(33)
+    return _quiz5(30, P.field_int(QUIZ["delai"]) + P.field_int(QUIZ["pause"])
+                  + b"".join(P.field_int(c) for c in QUIZ["categories"]))
+
+def trame_quiz_categorie(k):
+    return _quiz5(20, P.field_int(k["id"]) + P.field_str(k["nom"]) + P.field_int(k["nombre"]))
+
+def trames_quiz_panneau():
+    """A l'entree au salon, pour qui a le panneau : les categories (op20 x N, puis op28 « Liste des quizz recue »,
+    qui ecrit « Nom [n question(s)] » dans la liste), l'etat (op30 si un quizz tourne) et les points (op39). Le client
+    ne demande rien a l'ouverture du panneau : il faut les pousser, APRES les op61 (avant, il ne connait pas encore son
+    grade du groupe Quizz et ignore ces trames). Une seule fois par entree : op20 ajoute sans dedoublonner."""
+    out = [trame_quiz_categorie(k) for k in db.quiz_categories()] + [_quiz5(28)]
+    with QUIZ_VERROU:
+        if QUIZ["actif"]: out.append(trame_quiz_etat())
+        out.append(trame_quiz_points())
+    return out
+
+def fiches_quiz(cid):
+    """Textes des trames op41 d'une categorie : fiches « id#10question#10reponse#10auteur#10date » collees par « #10 »
+    (la chaine litterale de 3 caracteres, pas un saut de ligne ; date Unix), en morceaux de fiches entieres."""
+    morceaux = []; courant = ""
+    for q in db.quiz_questions(cid):
+        fiche = "#10".join([str(q["id"]), q["question"], affichage_reponses(q["reponses"]),
+                            q["auteur"] or "?", str(q["ts"])])
+        if courant and len(courant) + 3 + len(fiche) > QUIZ_FICHES_MAX:
+            morceaux.append(courant); courant = ""
+        courant = courant + "#10" + fiche if courant else fiche
+    return morceaux + ([courant] if courant else [])
+
+def categorie_en_cours(cid): return QUIZ["actif"] and cid in QUIZ["categories"]
 
 def _question_suivante():
     if not QUIZ["pioche"]:
         QUIZ["actif"] = False; QUIZ["question"] = None
+        quiz_aux_responsables(trame_quiz_etat())          # fin du quizz : op33 rend le bouton « Demarrer »
         quiz_top(); return
     theme, q = QUIZ["pioche"].pop()
-    QUIZ["question"] = (theme, q); QUIZ["echeance"] = time.time() + QUIZ_DELAI
+    QUIZ["question"] = (theme, q); QUIZ["echeance"] = time.time() + QUIZ["delai"]
     _diffuser5(223, P.field_str(theme) + P.field_str(q["q"]))
 
 def quiz_top():
@@ -1882,36 +1998,56 @@ def quiz_top():
         if find_client(pid): corps += P.field_int(pid) + P.field_int(pts)
     _diffuser5(222, corps)
 
+def demarrer_quiz(moi, categories, delai, pause, nombre=None):
+    """Lance le quizz sur ces categories ({id, nom}) ; sous QUIZ_VERROU. Faux (et rien d'envoye) sans question."""
+    pioche = []; utilisees = []
+    for k in categories:
+        qs = [(k["nom"], {"q": q["question"], "r": q["reponses"]}) for q in db.quiz_questions(k["id"]) if q["reponses"]]
+        if qs: pioche += qs; utilisees.append(k)
+    if not pioche: return False
+    random.shuffle(pioche)
+    QUIZ.update(actif=True, par=moi["id"], themes=[k["nom"] for k in utilisees], categories=[k["id"] for k in utilisees],
+                pioche=pioche[:nombre] if nombre else pioche, question=None, delai=delai, pause=pause,
+                echeance=time.time() + 3)
+    _diffuser5(220, P.field_int(moi["id"]) + P.field_str(", ".join(QUIZ["themes"])))
+    quiz_aux_responsables(trame_quiz_etat())
+    log(f"    *** QUIZZ demarre par {moi['name']} ({len(QUIZ['pioche'])} questions : {QUIZ['themes']}, "
+        f"{delai} s pour repondre, {pause} s entre les questions)")
+    return True
+
+def arreter_quiz(moi):
+    """Sous QUIZ_VERROU."""
+    QUIZ["actif"] = False; QUIZ["question"] = None; QUIZ["pioche"] = []
+    _diffuser5(221, P.field_int(moi["id"]))
+    quiz_aux_responsables(trame_quiz_etat())
+
+def remettre_points_a_zero(moi):
+    """Sous QUIZ_VERROU."""
+    QUIZ["points"].clear(); _diffuser5(226, P.field_int(moi["id"]))
+    quiz_aux_responsables(trame_quiz_points())
+
 def quiz_commande(conn, sess, moi, mots):
     """!quiz demarrer [theme...] | arreter | top | zero | points"""
     action = (mots[0].lower() if mots else "aide")
-    anim = bool({21, 5, 14, 13} & set(grades_de(sess.get("admin", 0), sess.get("anim", 0))))
     with QUIZ_VERROU:
         if action in ("points", "score"):
             conn.sendall(P.build_frame(228, bytes([5]) + P.field_int(QUIZ["points"].get(moi["id"], 0)))); return
         if action == "top": quiz_top(); return
-        if not anim:
+        if not pilote_quiz(sess):
             sys_notice(conn, "Le quizz est pilote par les animateurs.", "The quiz is run by the event hosts."); return
         if action in ("demarrer", "start", "go"):
             if QUIZ["actif"]:
                 sys_notice(conn, "Un quizz est deja en cours.", "A quiz is already running."); return       # erreur 114 du client
-            banque = charger_quiz()
+            categories = db.quiz_categories()
             voulu = [m.lower() for m in mots[1:]]
-            themes = [t for t in banque if not voulu or any(v in t.lower() for v in voulu)]
-            if not themes: sys_notice(conn, f"Themes disponibles : {', '.join(banque) or 'aucun (quiz.json)'}",
-                                      f"Available themes: {', '.join(banque) or 'none (quiz.json)'}"); return
-            pioche = [(t, q) for t in themes for q in banque[t]]
-            random.shuffle(pioche)
-            QUIZ.update(actif=True, par=moi["id"], themes=themes, pioche=pioche[:15], question=None,
-                        echeance=time.time() + 3)
-            _diffuser5(220, P.field_int(moi["id"]) + P.field_str(", ".join(themes)))
-            log(f"    *** QUIZZ demarre par {moi['name']} ({len(QUIZ['pioche'])} questions : {themes})")
+            choisies = [k for k in categories if not voulu or any(v in k["nom"].lower() for v in voulu)]
+            if not demarrer_quiz(moi, choisies, QUIZ_DELAI, QUIZ_PAUSE, QUIZ_QUESTIONS):
+                noms = ", ".join(k["nom"] for k in categories if k["nombre"])
+                sys_notice(conn, f"Themes disponibles : {noms or 'aucun'}", f"Available themes: {noms or 'none'}")
         elif action in ("arreter", "stop"):
-            if QUIZ["actif"]:
-                QUIZ["actif"] = False; QUIZ["question"] = None
-                _diffuser5(221, P.field_int(moi["id"]))
+            if QUIZ["actif"]: arreter_quiz(moi)
         elif action in ("zero", "reset", "raz"):
-            QUIZ["points"].clear(); _diffuser5(226, P.field_int(moi["id"]))
+            remettre_points_a_zero(moi)
         else:
             sys_notice(conn, "!quiz demarrer [theme] | arreter | top | zero | points")
 
@@ -1923,8 +2059,9 @@ def quiz_reponse(moi, texte):
         dit = _sans_accents(texte)
         if not dit or not any(_sans_accents(r) == dit for r in q["r"]): return
         pts = QUIZ["points"][moi["id"]] = QUIZ["points"].get(moi["id"], 0) + 1
-        QUIZ["question"] = None; QUIZ["echeance"] = time.time() + QUIZ_PAUSE
+        QUIZ["question"] = None; QUIZ["echeance"] = time.time() + QUIZ["pause"]
         _diffuser5(224, P.field_int(moi["id"]) + P.field_int(pts) + P.field_str(q["r"][0]))
+        quiz_aux_responsables(trame_quiz_points())
         if moi.get("db_id"):
             notos = db.get_notos(moi["db_id"])
             notos[NOTO_QUIZZ] = min(NOTORIETES[NOTO_QUIZZ][2], notos[NOTO_QUIZZ] + 5)
@@ -1938,7 +2075,7 @@ def surveiller_quiz():
                 if not QUIZ["actif"] or time.time() < QUIZ["echeance"]: continue
                 if QUIZ["question"]:                                # temps ecoule
                     _diffuser5(225, P.field_str(QUIZ["question"][1]["r"][0]))
-                    QUIZ["question"] = None; QUIZ["echeance"] = time.time() + QUIZ_PAUSE
+                    QUIZ["question"] = None; QUIZ["echeance"] = time.time() + QUIZ["pause"]
                 else:
                     _question_suivante()
         except Exception as e:
@@ -1956,7 +2093,8 @@ def surveiller_quiz():
 #   cat6 op164 s    /quicknews [texte]                        quicknews     -> op165 06 b1 ; op166 06 str a tous
 #   cat4 op209, 232, 234, 236 : topic et caisse de gils du panneau d'equipe (react_panneau, plus haut)
 #   cat4 op242 u / op215 s : infos offline -> profil op65 + op241 (infos_offline) ; erreur op216 04 v(code)
-# Restent sans reponse : panneau Quizz du client (cat5 op21 a op40) et menu Twitter (cat5 op120).
+#   cat5 op21 a op40 : le panneau Quizz du client (react_quizz, depuis le 2026-10-22)
+# Reste sans reponse : le menu Twitter (cat5 op120).
 # ===========================================================================
 MODERE = {"actif": False}      # mode modere : seuls les grades qui ont « talkwhilemoderate » parlent au salon
 
@@ -2057,14 +2195,109 @@ def react_equipe(conn, op, payload, sess, moi):
     log(f"    /ident de {moi['name']} : code {code}")
     return True
 
+# ---------------------------------------------------------------------------
+# PANNEAU QUIZZ DU CLIENT (TfrmSpecialUser, onglets « Questions des quizz » et « Quizz en cours »), lu dans le binaire
+# le 2026-10-22, jamais capture. Requetes (categorie 5) et reponses :
+#   21 b1 s(nom) | b0 u(categorie)        ajouter / supprimer une categorie  -> 22 b(ajout) b1 | b(ajout) b0 v(code) [int]
+#   25 b1 u(cat) s(question) s(reponse) | b0 u(cat) u(question)              -> 26 (meme forme) ; « Editer » = 25 b0 puis 25 b1
+#   40 u(groupe) u(cat)                   questions d'une categorie          -> 41 int(groupe) int(cat) x(fiches)* puis 42 b1 int(groupe) int(cat)
+#   29 u(temps de reponse) u(temps entre les questions) u(cat)*   demarrer   -> 31 b1 | b0 v(code)
+#   32 arreter -> 34 ; 35 remettre les points a zero -> 36 ; 37 « Afficher le top5 actuel » -> 38   (b1 | b0 v(code))
+# Etat des panneaux : 20 int(cat) str(nom) int(nombre) ajoute une categorie, 23 int(cat) la retire, 24 int(question)
+# int(cat) str(question) str(reponse) str(auteur) int(date) ajoute une question, 27 int(cat) int(question) la retire,
+# 30 / 33 quizz en cours / arrete, 39 les points. Les accuses (22, 26, 31...) ne touchent pas aux listes : le serveur
+# envoie lui-meme les trames d'etat. Codes : 109 categorie existante, 110 categorie %d inexistante (+ int, seulement
+# dans 22 et 26), 111 question %d inexistante (+ int, 26), 112 categorie en cours d'utilisation, 113 pas de quizz en
+# cours, 114 quizz deja en cours, 115 aucune categorie avec des questions, 87 droits, 0 texte refuse. Un code dont le
+# message attend un nombre, envoye sans lui, fait planter le client (« Erreur fatale ») : ne pas en ajouter d'autres.
+# ---------------------------------------------------------------------------
+QUIZ_ACCUSES = {21: 22, 25: 26, 29: 31, 32: 34, 35: 36, 37: 38, 40: 42}
+
 def react_quizz(conn, op, payload, sess, moi):
-    """Categorie 5 (quizz). Seul /points (op227) a une reponse : le panneau Quizz du client (op21 a op40) n'est pas
-    branche (le quizz se pilote par !quiz), ni le menu Twitter (op120, une recompense en gils op121 sur l'original)."""
+    """Categorie 5 : le panneau Quizz du client et /points (op227). Le client ne verifie aucun droit avant d'envoyer :
+    tout se reverifie ici (avoir recu le panneau Quizz, c'est-a-dire le grade 5). Reste sans reponse : le menu
+    Twitter (op120, une recompense en gils op121 sur l'original)."""
     if op == 227:
         with QUIZ_VERROU: points = QUIZ["points"].get(moi["id"], 0)
         conn.sendall(P.build_frame(228, bytes([5]) + P.field_int(points)))    # « Vous avez %d point(s) ... »
         return
-    log(f"    >>> categorie 5 op{op} non geree (panneau Quizz du client, Twitter) : args={payload.hex()}")
+    if op not in QUIZ_ACCUSES:
+        log(f"    >>> categorie 5 op{op} non geree (menu Twitter) : args={payload.hex()}"); return
+    v = GU.champs(payload)
+    nombre = lambda i: v[i] if len(v) > i and isinstance(v[i], int) else 0
+    ajout = op in (21, 25) and nombre(0) == 1
+    accuse = QUIZ_ACCUSES[op]
+    def ok(): conn.sendall(_quiz5(accuse, (P.field_byte(1 if ajout else 0) if op in (21, 25) else b"") + P.field_byte(1)))
+    def refus(code, ident=None):
+        pl = (P.field_byte(1 if ajout else 0) if op in (21, 25) else b"") + P.field_byte(0) + P.field_v(code)
+        conn.sendall(_quiz5(accuse, pl + (P.field_int(ident) if ident is not None else b"")))
+        log(f"    quizz : op{op} de {moi['name']} refuse (code {code})")
+    # op42 lit le panneau du groupe qu'il nomme sans verifier qu'il existe : sans panneau, seul un refus (b0) part
+    if GROUPE_QUIZZ not in sess.get("panneaux", ()): return refus(87)
+    if op == 40:                                   # QUESTIONS D'UNE CATEGORIE (la liste se debloque a op42 b1)
+        groupe, cid = nombre(0), nombre(1)
+        if groupe != GROUPE_QUIZZ: return refus(87)
+        if db.quiz_categorie(cid):                 # categorie supprimee entre-temps : op42 seul (op23 est deja parti)
+            for texte in fiches_quiz(cid):
+                conn.sendall(_quiz5(41, P.field_int(groupe) + P.field_int(cid) + champ_zlib(texte)))
+        conn.sendall(_quiz5(42, P.field_byte(1) + P.field_int(groupe) + P.field_int(cid)))
+        return
+    auteur = texte_quiz(moi["name"], 40) or "?"
+    with QUIZ_VERROU:
+        if op == 21 and ajout:                     # NOUVELLE CATEGORIE
+            nom = texte_quiz(next((x for x in v[1:] if isinstance(x, str)), ""), QUIZ_LONGUEURS["categorie"])
+            if not nom: return refus(0)
+            cid = db.quiz_creer_categorie(nom)
+            if not cid: return refus(109)          # « La categorie existe deja ! »
+            ok(); quiz_aux_responsables(trame_quiz_categorie({"id": cid, "nom": nom, "nombre": 0}))
+            log(f"{MARQUE_ADMIN}{moi['name']} : categorie de quizz {nom!r} creee ({cid})")
+            return
+        if op in (21, 25):
+            cid = nombre(1)
+            k = db.quiz_categorie(cid)
+            if not k: return refus(110, cid)       # « Categorie %d inexistante »
+            # 112 « en cours d'utilisation » : ni suppression, ni ajout (« Editer » envoie suppression PUIS ajout : un
+            # ajout accepte apres une suppression refusee doublerait la question)
+            if categorie_en_cours(cid): return refus(112)
+            if op == 21:                           # SUPPRIMER UNE CATEGORIE (et ses questions)
+                db.quiz_supprimer_categorie(cid)
+                ok(); quiz_aux_responsables(_quiz5(23, P.field_int(cid)))
+                log(f"{MARQUE_ADMIN}{moi['name']} : categorie de quizz {k['nom']!r} supprimee ({cid})")
+                return
+            if ajout:                              # NOUVELLE QUESTION : s(question) s(reponse)
+                textes = [x for x in v[2:] if isinstance(x, str)] + ["", ""]
+                question = texte_quiz(textes[0], QUIZ_LONGUEURS["question"])
+                reponses = lire_reponses(textes[1])
+                if not question or not reponses: return refus(0)
+                ts = int(time.time())
+                qid = db.quiz_ajouter_question(cid, question, reponses, auteur, ts)
+                ok(); quiz_aux_responsables(_quiz5(24, P.field_int(qid) + P.field_int(cid) + P.field_str(question)
+                                                   + P.field_str(affichage_reponses(reponses)) + P.field_str(auteur)
+                                                   + P.field_int(ts)))
+                log(f"{MARQUE_ADMIN}{moi['name']} : question {qid} ajoutee au quizz {k['nom']!r}")
+                return
+            qid = nombre(2)                        # SUPPRIMER UNE QUESTION
+            q = db.quiz_question(qid)
+            if not q or q["categorie"] != cid: return refus(111, qid)    # « Question %d inexistante »
+            db.quiz_supprimer_question(qid)
+            ok(); quiz_aux_responsables(_quiz5(27, P.field_int(cid) + P.field_int(qid)))
+            log(f"{MARQUE_ADMIN}{moi['name']} : question {qid} retiree du quizz {k['nom']!r}")
+            return
+        if op == 29:                               # DEMARRER : temps bornes a 5..300 s, comme le fait le client
+            if QUIZ["actif"]: return refus(114)
+            delai = min(300, max(5, nombre(0))); pause = min(300, max(5, nombre(1)))
+            voulues = {x for x in v[2:] if isinstance(x, int)}
+            choisies = [k for k in db.quiz_categories() if k["id"] in voulues and k["nombre"]]
+            if not choisies: return refus(115)     # « Aucune categorie avec des questions selectionnee »
+            ok(); demarrer_quiz(moi, choisies, delai, pause)
+            return
+        if op == 32:                               # ARRETER
+            if not QUIZ["actif"]: return refus(113)
+            ok(); arreter_quiz(moi)
+            return
+        ok()
+        if op == 35: remettre_points_a_zero(moi)   # REMETTRE LES POINTS A ZERO
+        else: quiz_top()                           # op37 : le top 5 a tout le salon (op222), comme « !quiz top »
 
 def nouvelle_rapide():
     """La news rapide (/quicknews), affichee « *** Infos : <texte> » a l'entree au salon apres le message d'accueil."""
@@ -3098,6 +3331,8 @@ def react(conn, op, payload, server_name):
                 conn.sendall(P.build_frame(166, b"\x06"+P.field_str(nouvelle_rapide())))
             if MODERE["actif"]:                      # op82 : le client note l'etat et l'annonce (« mode modere active »)
                 conn.sendall(P.build_frame(82, bytes([1]) + P.field_byte(1)))
+            if GROUPE_QUIZZ in SESSION.get("panneaux", ()):   # panneau Quizz : categories, etat, points (apres les op61)
+                conn.sendall(b"".join(trames_quiz_panneau()))
         else:
             log("  !! room_burst_neutral.bin introuvable")
         return
@@ -3319,7 +3554,8 @@ def main():
     for nom in db.appliquer_admins():
         log(f"    *** --admin {nom} : aucun compte de ce nom. Creer le compte (premiere connexion), puis relancer "
             f"le serveur : un niveau n'est jamais reserve a un nom libre (le premier venu le prendrait)")
-    realigner_encheres_robots()                # prix des reglages actuels pour celles qui n'ont pas de mise
+    importer_quiz(os.path.join(os.path.dirname(os.path.abspath(__file__)), "quiz.json"))   # base neuve : questions de depart
+    realigner_encheres_robots()               # prix des reglages actuels pour celles qui n'ont pas de mise
     encheres_des_robots(diffuser=False)       # les 3 cartes de chaque robot, avant la premiere connexion
     log(f"=== Serveur FFWTT v0 sur {a.host}:{a.port}  (nom='{a.name}') ===")
     if a.host in ("0.0.0.0", ""):

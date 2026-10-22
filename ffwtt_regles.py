@@ -25,7 +25,8 @@ DIRS = [(0, -1, 0, 2), (1, 0, 1, 3), (0, 1, 2, 0), (-1, 0, 3, 1)]   # dx, dy, mo
 
 # types de retournement envoyes dans op143 (observes : 1, 2 et 3)
 T_NORMAL, T_IDENTIQUE, T_PLUS = 1, 2, 3
-# restrictions du Mur puissant (op138) : 1 et 2 observes, 3 par elimination
+# restrictions du Mur puissant (op138) : le client affiche le type 1 « + », 2 « - » et 3 « = », suivis du nombre (dessin
+# du plateau 0x6572AA, chaines 0x658A88 / 0x658A94 / 0x658AA0, lu le 2026-10-22) ; 1 et 2 ont aussi ete observes en jeu
 R_SUP, R_INF, R_EGAL = 1, 2, 3
 # Numerotation du jeu (celle des cartes, lue dans la table du client, et du plateau op137) : verifiee sur les icones
 # dessinees en haut a droite des images de cartes (2026-09-23). L'ordre du wiki (Eau, Feu, Neige, Vent, Tonnerre...)

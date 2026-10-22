@@ -19,7 +19,7 @@ Administrateur : aucun compte n'est code en dur. Le premier compte cree sur une 
 --admin COMPTE (ffwtt_server.py) ou FFWTT_ADMINS=compte1,compte2 (compte existant, au demarrage), ou serveur arrete :
 py ffwtt_admin.py niveau COMPTE 4.
 """
-import sqlite3, hashlib, hmac, secrets, re, os, random, time, threading, functools
+import sqlite3, hashlib, hmac, secrets, re, os, random, time, threading, functools, json
 
 # FFWTT_DB permet a test_serveur.py d'utiliser une base jetable au lieu de la vraie.
 DB_PATH = os.environ.get("FFWTT_DB") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "ffwtt.db")
@@ -128,6 +128,11 @@ def init():
         c.execute("""CREATE TABLE IF NOT EXISTS groupes_equipe(
             groupe INTEGER PRIMARY KEY, caisse INTEGER DEFAULT 0,
             topic TEXT DEFAULT '', topic_par TEXT DEFAULT '', topic_ts INTEGER DEFAULT 0)""")
+        # quizz : categories et questions du panneau Quizz du client (reponses acceptees : liste JSON, la 1re est affichee)
+        c.execute("CREATE TABLE IF NOT EXISTS quiz_categories(id INTEGER PRIMARY KEY AUTOINCREMENT, nom TEXT UNIQUE COLLATE NOCASE)")
+        c.execute("""CREATE TABLE IF NOT EXISTS quiz_questions(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, categorie INTEGER, question TEXT, reponses TEXT,
+            auteur TEXT DEFAULT '', ts INTEGER DEFAULT 0)""")
         c.execute("""CREATE TABLE IF NOT EXISTS guildes(
             id INTEGER PRIMARY KEY AUTOINCREMENT, nom TEXT UNIQUE COLLATE NOCASE, maitre INTEGER, cree INTEGER,
             finalisee INTEGER DEFAULT 0, mdp TEXT DEFAULT '', exp INTEGER DEFAULT 0, gils INTEGER DEFAULT 0,
@@ -880,6 +885,56 @@ def ajouter_caisse_groupe(groupe, delta):
         c.execute("INSERT INTO groupes_equipe(groupe, caisse) VALUES(?,?) ON CONFLICT(groupe) DO UPDATE SET caisse=?",
                   (groupe, total, total))
         return total
+
+# ---------- quizz : categories et questions (panneau Quizz du client) ----------
+def _question_quiz(r):
+    d = dict(r)
+    try: d["reponses"] = [x for x in json.loads(d["reponses"] or "[]") if x]
+    except ValueError: d["reponses"] = []
+    return d
+
+def quiz_categories():
+    """[{id, nom, nombre}] dans l'ordre de creation, avec le nombre de questions de chacune."""
+    with _lock, _conn() as c:
+        rows = c.execute("SELECT k.id, k.nom, (SELECT COUNT(*) FROM quiz_questions q WHERE q.categorie=k.id) AS nombre "
+                         "FROM quiz_categories k ORDER BY k.id").fetchall()
+    return [dict(r) for r in rows]
+
+def quiz_categorie(cid):
+    with _lock, _conn() as c:
+        r = c.execute("SELECT id, nom FROM quiz_categories WHERE id=?", (cid,)).fetchone()
+    return dict(r) if r else None
+
+def quiz_creer_categorie(nom):
+    """Identifiant de la nouvelle categorie, ou None si le nom existe deja (sans tenir compte de la casse)."""
+    with _lock, _conn() as c:
+        try: return c.execute("INSERT INTO quiz_categories(nom) VALUES(?)", (nom,)).lastrowid
+        except sqlite3.IntegrityError: return None
+
+def quiz_supprimer_categorie(cid):
+    with _lock, _conn() as c:
+        c.execute("DELETE FROM quiz_questions WHERE categorie=?", (cid,))
+        c.execute("DELETE FROM quiz_categories WHERE id=?", (cid,))
+
+def quiz_questions(cid):
+    """Questions d'une categorie : [{id, categorie, question, reponses (liste), auteur, ts}], par identifiant."""
+    with _lock, _conn() as c:
+        rows = c.execute("SELECT * FROM quiz_questions WHERE categorie=? ORDER BY id", (cid,)).fetchall()
+    return [_question_quiz(r) for r in rows]
+
+def quiz_question(qid):
+    with _lock, _conn() as c:
+        r = c.execute("SELECT * FROM quiz_questions WHERE id=?", (qid,)).fetchone()
+    return _question_quiz(r) if r else None
+
+def quiz_ajouter_question(cid, question, reponses, auteur, ts):
+    with _lock, _conn() as c:
+        return c.execute("INSERT INTO quiz_questions(categorie, question, reponses, auteur, ts) VALUES(?,?,?,?,?)",
+                         (cid, question, json.dumps(list(reponses), ensure_ascii=False), auteur, int(ts))).lastrowid
+
+def quiz_supprimer_question(qid):
+    with _lock, _conn() as c:
+        c.execute("DELETE FROM quiz_questions WHERE id=?", (qid,))
 
 def ajouter_exp_guilde(gid, delta):
     with _lock, _conn() as c:
