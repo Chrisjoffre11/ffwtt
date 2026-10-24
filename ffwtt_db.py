@@ -54,8 +54,18 @@ def mdp_correct(stocke, pw):
         except ValueError: return False
         return hmac.compare_digest(hash_mdp(pw, sel), stocke)
     return hmac.compare_digest(stocke, _hash(pw))
+class _Connexion(sqlite3.Connection):
+    """Connexion qui se FERME a la sortie de son bloc « with » : sqlite3 n'y fait que valider ou annuler la transaction.
+    Sans cela, chaque connexion restait ouverte (avec son fichier) jusqu'au passage du ramasse-miettes de Python, rare sur
+    un serveur peu sollicite : sur le VPS, 1024 fichiers ouverts en une dizaine d'heures, puis « unable to open database
+    file » et « Too many open files », site et jeu hors service (nuit du 2026-10-23). Tout usage passe par
+    « with _lock, _conn() as c: » et ne se sert plus de c (ni d'un curseur) apres le bloc."""
+    def __exit__(self, *exc):
+        try: return super().__exit__(*exc)
+        finally: self.close()
+
 def _conn():
-    c = sqlite3.connect(DB_PATH)
+    c = sqlite3.connect(DB_PATH, factory=_Connexion)
     c.row_factory = sqlite3.Row
     return c
 

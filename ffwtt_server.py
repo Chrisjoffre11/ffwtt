@@ -94,7 +94,15 @@ def trames_host_banni(server_name):
 MAX_CONNEXIONS = int(os.environ.get("FFWTT_MAX_CONNEXIONS") or 300)
 MAX_PAR_IP = int(os.environ.get("FFWTT_MAX_PAR_IP") or 12)
 DELAI_IDENTIFICATION = 600    # s : une connexion qui ne s'est pas identifiee (op100) est fermee
-DELAI_SILENCE = 900           # s sans aucune trame (le client repond au ping op512, envoye toutes les 10 s, par op768)
+DELAI_SILENCE = 900           # s sans aucune trame (le client repond au ping op2, envoye toutes les 10 s, par op3)
+# Reconnexion d'un compte dont une ancienne connexion est encore ouverte mais muette (client fige, connexion tombee sans
+# fermeture TCP) : au-dela de ce delai sans aucune trame, l'ancienne est fermee comme une deconnexion ordinaire et la
+# nouvelle est acceptee ; en deca, le refus « compte deja connecte » (code 4) reste. 30 s = trois pings op2 (un toutes
+# les 10 s au salon) restes sans reponse op3 : un client vivant y repond toujours. Avant l'entree au salon, aucun ping
+# ne part : une connexion restee 30 s sur le choix du pseudo sans rien envoyer est donc remplacee elle aussi.
+# Reglable par FFWTT_DELAI_SESSION_MUETTE (le test l'abaisse).
+DELAI_SESSION_MUETTE = float(os.environ.get("FFWTT_DELAI_SESSION_MUETTE") or 30)
+DELAI_FERMETURE = 10          # s laisses au fil d'une connexion qu'on ferme pour faire son menage (op60, partie...)
 CONNEXIONS = {}               # adresse IP -> connexions ouvertes
 _CONNEXIONS_LOCK = threading.Lock()
 _REFUS_JOURNALISES = {}       # adresse IP -> dernier refus ecrit au journal (une ligne par minute au plus)
@@ -136,12 +144,19 @@ def _session(conn, addr, server_name):
         try: conn.sendall(trames_host_banni(server_name)); time.sleep(0.3); conn.close()
         except OSError: pass
         return
-    _sess(conn)["ip"] = addr[0]
+    sess = _sess(conn)
+    sess["ip"] = addr[0]
     send_greeting(conn, server_name)
     buf=bytearray()
     conn.settimeout(1.0)
-    debut = derniere = time.time()
+    # instant de la derniere trame recue, aussi dans la session : une nouvelle connexion du meme compte le consulte
+    # (session_du_compte) pour savoir si celle-ci est encore vivante
+    debut = derniere = sess["derniere_trame"] = time.time()
     while True:
+        if sess.get("fermeture"):
+            # fermee pour une nouvelle connexion du meme compte (fermer_session) : sous Windows, la fermeture de la
+            # socket ne reveille pas recv ; ce test, fait au moins une fois par seconde (delai de recv), y supplee
+            log(f"<<< {addr[0]} : connexion remplacee par une nouvelle du meme compte"); break
         try:
             data=conn.recv(4096)
         except socket.timeout:
@@ -155,10 +170,11 @@ def _session(conn, addr, server_name):
             break
         if not data:
             log("<<< client deconnecte"); break
-        derniere = time.time()
+        derniere = sess["derniere_trame"] = time.time()
         buf.extend(data)
         for op,payload in P.parse_frames(buf):
-            log(f"  C->S  {describe_entrant(op,payload)}")
+            if op not in (3, 768):       # pas les reponses aux pings (une toutes les 10 s par joueur)
+                log(f"  C->S  {describe_entrant(op,payload)}")
             try:
                 react(conn, op, payload, server_name)
             except Exception as e:
@@ -648,17 +664,50 @@ def _sess(conn):
 
 def session_du_compte(account_id, sauf=None):
     """La connexion deja ouverte sur ce compte (hors `sauf`), s'il y en a une qui repond encore. Une connexion morte
-    (jeu plante, reseau coupe) est fermee au passage : son fil la nettoie, et le compte n'est pas bloque."""
+    (l'envoi echoue : jeu plante, reseau coupe) ou muette depuis plus de DELAI_SESSION_MUETTE (client fige, connexion
+    tombee sans fermeture) est fermee au passage, et le compte n'est pas bloque. Appelee sous _VERROU_CONNEXION."""
     for k, s in list(SESSIONS.items()):
         c = s.get("conn")
         if k == id(sauf) or c is None or s.get("account_id") != account_id: continue
-        try:
-            c.sendall(P.build_frame(512, b"\x00"))                  # le ping habituel : le client y repond par op768
-            return c
-        except OSError:
-            try: c.close()
-            except OSError: pass
+        muette = time.time() - s.get("derniere_trame", time.time())
+        if muette <= DELAI_SESSION_MUETTE:
+            try:
+                c.sendall(P.build_frame(2, b"\x00"))                # le ping habituel : le client y repond par op3
+                return c
+            except OSError:
+                raison = "envoi impossible"
+        else:
+            raison = f"aucune trame depuis {int(muette)} s"
+        if not fermer_session(k, s, raison):
+            return c                                                # son fil n'a pas fini : refus, comme avant
     return None
+
+def fermer_session(k, s, raison):
+    """Ferme la connexion de la session `s` (cle `k` de SESSIONS) et attend que son fil ait fait le menage d'une
+    deconnexion ordinaire : op60 aux autres joueurs, partie abandonnee, defi et echange refermes, journal. Le fil retire
+    la session de SESSIONS en dernier : tant qu'elle y est, le menage n'est pas fini (et le meme joueur apparaitrait deux
+    fois dans la liste, ou l'op60 de l'ancienne connexion effacerait la nouvelle). Rend False si le fil n'a pas fini a
+    temps (DELAI_FERMETURE) ; sans nouvelle attente si une fermeture precedente n'a pas abouti (le verrou des connexions
+    n'est pas retenu une seconde fois)."""
+    if s.get("fermeture"): return False
+    s["fermeture"] = True
+    c = s["conn"]
+    log(f"<<< {s.get('pseudo', {}).get('name', '?')} ({s.get('ip', '?')}) : ancienne connexion du compte fermee pour "
+        f"une nouvelle ({raison})")
+    # Sous Linux, recv rend aussitot la main ; sous Windows, c'est le drapeau « fermeture » que sa boucle regarde a chaque
+    # tour (une seconde au plus). Le fil sort alors de sa boucle et fait le menage.
+    try: c.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        try: c.close()                     # deja coupee de l'autre cote : sa prochaine lecture echoue de meme
+        except OSError: pass
+    fin = time.time() + DELAI_FERMETURE
+    while SESSIONS.get(k) is s:
+        if time.time() > fin:
+            log(f"    !! le fil de l'ancienne connexion n'a pas fini en {DELAI_FERMETURE} s")
+            return False
+        time.sleep(0.05)
+    return True
+
 MUTED = set()  # joueurs rendus muets
 BANNED = set() # pseudos bannis
 ROOM_BURST = b""
@@ -834,10 +883,14 @@ def charger_rafale(chemin=""):
         log(f"    !! rafale introuvable : {chemin} (rafale generee a la place)")
 
 def keepalive(conn):
+    # Ping op2 : le client y repond par op3 (cas 2 de son repartiteur, 0x639ECE : « mov ax, 3 ; call 0x6367C4 », rien
+    # d'autre). Jusqu'au 2026-10-24 le serveur envoyait op512, que le client ignore (aucun gestionnaire) : sans reponse,
+    # un joueur reste au salon sans rien taper etait coupe au bout de DELAI_SILENCE (vu le 2026-10-24 : « aucune trame
+    # depuis 900 s »).
     try:
         while True:
             time.sleep(10)
-            conn.sendall(P.build_frame(512, b"\x00"))   # ping serveur
+            conn.sendall(P.build_frame(2, b"\x00"))     # ping serveur
     except OSError:
         pass
 
@@ -3223,7 +3276,7 @@ def react(conn, op, payload, server_name):
         conn.sendall(P.build_frame(47, b"\x01"+P.field_int(_acc.get("gils",0))))
         # (les encheres en cours sont parties dans la rafale, avant op62, comme dans la capture)
         log(f"    collection ({len(coll)} cartes) + power {db.get_powers(pdb)} + {len(db.get_skills(pdb))} competences")
-        # keepalive : ping op512 toutes les 10 s (le client repond op768)
+        # keepalive : ping op2 toutes les 10 s (le client repond op3)
         if not conn_state.get(id(conn)):
             conn_state[id(conn)]=True
             threading.Thread(target=keepalive, args=(conn,), daemon=True).start()
@@ -3433,7 +3486,8 @@ def react(conn, op, payload, server_name):
         with _VERROU_CONNEXION:          # deux connexions simultanees sur le meme compte passaient toutes les deux
             if session_du_compte(acc["id"], sauf=conn):
                 # comme le serveur d'origine : code 4 « Ce compte est deja connecte sur le serveur » (table des erreurs du
-                # client). Sans ce refus, le meme compte apparaissait deux fois dans la liste des joueurs.
+                # client). Sans ce refus, le meme compte apparaissait deux fois dans la liste des joueurs. Une ancienne
+                # connexion morte ou muette (DELAI_SESSION_MUETTE) a deja ete fermee par session_du_compte : pas de refus.
                 refuser(4)
                 log(f"    *** CONNEXION REFUSEE ({login}) : compte deja connecte")
                 return

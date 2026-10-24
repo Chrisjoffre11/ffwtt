@@ -3,6 +3,34 @@
 Les changements du serveur, du plus récent au plus ancien. Avant de mettre à jour un serveur en service, lisez la
 rubrique « À savoir pour mettre à jour ».
 
+## 2026-10-24
+
+### Correctifs
+
+- **Le serveur ne cesse plus de répondre au bout de quelques heures.** Chaque accès à la base laissait un fichier ouvert
+  jusqu'au passage du ramasse-miettes de Python, rare sur un serveur peu fréquenté. La limite du système (1024 fichiers
+  ouverts) était atteinte en une dizaine d'heures : le processus tournait toujours, mais il ne pouvait plus ouvrir la
+  base ni accepter de connexion (« unable to open database file », « Too many open files »). Les connexions à la base
+  se ferment maintenant à la fin de chaque accès, et le nombre de fichiers ouverts reste stable.
+- **Un joueur silencieux n'est plus déconnecté au bout de 15 minutes.** Le serveur envoyait un « ping » que le jeu ne
+  connaît pas : sans réponse, un joueur resté au salon sans rien taper était coupé par le délai de silence. Le serveur
+  envoie maintenant le ping auquel le jeu répond (`op2`, réponse `op3`).
+- **Reconnexion après un plantage du jeu ou une coupure du réseau.** Quand l'ancienne connexion du compte est encore
+  ouverte mais n'envoie plus rien depuis 30 secondes, elle est fermée comme une déconnexion normale (les autres joueurs
+  voient le départ, la partie en cours est abandonnée) et la nouvelle connexion est acceptée. Avant, le jeu répondait
+  « Ce compte est déjà connecté sur le serveur » jusqu'à ce que l'ancienne connexion expire. Le délai se règle par la
+  variable d'environnement `FFWTT_DELAI_SESSION_MUETTE` (en secondes).
+- Le journal n'écrit plus les réponses aux pings (une toutes les 10 secondes par joueur).
+
+### À savoir pour mettre à jour
+
+- Arrêtez le serveur, remplacez les fichiers, relancez-le. Rien ne change dans la base.
+
+### Tests
+
+`test_serveur.py` (208 vérifications) contrôle le nouveau ping et la reconnexion (refusée tant que l'ancienne connexion répond, acceptée
+une fois le délai dépassé).
+
 ## 2026-10-22
 
 ### Nouveautés

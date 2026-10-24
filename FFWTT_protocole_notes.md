@@ -71,7 +71,7 @@ La clé repart à 0x4F pour chaque chaîne. La longueur est XORée avec 0x55DE.
 | S→C | 10 | **adresse bannie** (ctx 0, aucun champ). **Capturé** : le serveur envoie `op1 00`, `op4 00 str(nom du serveur)`, puis `op10 00` **à la place d'`op6`**, et ferme la connexion. Le client affiche : « Votre nom d'hôte est banni de ce serveur. Acceptez votre sanction : le ban n'en sera levé que plus vite (quelques heures généralement). Si vous pensez ne pas être concerné par ce ban, veuillez nous en excuser et réessayer de vous connecter au serveur un peu plus tard. » |
 | C→S | 44 | prêt : le serveur envoie la rafale du salon |
 | C→S | 71 / S→C 72, 73 | fin de réception, entrée validée |
-| S↔C | 2/3, 512/768 | pings |
+| S→C / C→S | 2 / 3 | **ping** : `op2 00` → le client répond `op3 00`, sans condition (cas 2 du répartiteur, `0x639ECE` : `mov ax, 3 ; call 0x6367C4`). Le serveur l'envoie toutes les 10 s au salon. `op512` n'a **aucun** gestionnaire dans le client : envoyé jusqu'au 2026-10-24, il restait sans réponse, et un joueur silencieux était coupé par le délai de silence (900 s) |
 
 ### Contenu du salon (rafale envoyée après op44)
 Ordre observé (capture) : `op81` (page d'accueil) ; `op86` groupes (dont les pseudo-groupes des onglets de notes,
@@ -602,7 +602,7 @@ ctx1 + byte(1) + int(pid) + str(pseudo) + int(id de compte) + int(guilde)
      + int(Défaites) + int(Nuls) + int(Quits illégaux) + int(0)
      + 6 × int16(notoriété Elo, sur 2000)
      + str(NOTE PUBLIQUE) + byte(0)
-     + 33 × int (statistiques de collection ; le dernier = total de cartes)
+     + 32 × int (nombre de cartes de power 0, 1… 31 ; la case 31 compte aussi les plus fortes) + int(power total)
 ```
 
 Champs 4 à 11 relus dans le gestionnaire (`0x63E3F9`) le 2026-10-12 (l'ancienne lecture « int(0) + str(host) + … » était

@@ -278,7 +278,7 @@ py test_serveur.py
 `test_regles.py` rejoue coup par coup une partie réelle (Élémentaire, Bataille, Identique, Plus, Même mur, Mur
 additionnel, Mur puissant) et vérifie chaque retournement. `test_serveur.py` démarre un serveur sur une base jetable et
 rejoue tout le protocole, de la connexion aux enchères, y compris les attaques connues (compter cinq minutes) ; il doit
-afficher **205/205**. À lancer après toute modification.
+afficher **208/208**. À lancer après toute modification.
 
 ## État du projet
 

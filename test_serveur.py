@@ -811,6 +811,11 @@ def main():
         hist = [pl for o, pl in frames(lire(s2, 1.5)) if o == 179]
         verifier("salon des operateurs : aucun historique rejoue a la reconnexion", hist == [],
                  f"{len(hist)} ligne(s)")
+        # ping du salon : op2, auquel le client repond par op3 (cas 2 de son repartiteur). op512, envoye jusqu'au
+        # 2026-10-24, n'a pas de gestionnaire : sans reponse, un joueur silencieux etait coupe au bout de 900 s.
+        r_ping = [o for o, _ in frames(lire(s2, 11.5))]
+        verifier("ping du salon : op2 toutes les 10 s (le client y repond par op3), plus d'op512",
+                 2 in r_ping and 512 not in r_ping, str(r_ping))
         s2.close()
 
         # ================= REQUETES DU CLIENT RESTEES SANS REPONSE JUSQU'AU 2026-10-12 =================
@@ -1586,11 +1591,13 @@ def main():
         tq.sendall(P.build_frame(96, b"\x02" + P.field_int(pid_du) + P.field_byte(0))); lire(tq, 0.4); lire(du, 0.4)
         tq.close(); du.close(); temoin.close()
 
-        # -- un serveur aux plafonds bas : 3 connexions par adresse, 2 comptes crees par heure et par adresse
+        # -- un serveur aux plafonds bas : 3 connexions par adresse, 2 comptes crees par heure et par adresse ; et une
+        # connexion muette remplacee apres 4 s au lieu de 30 (FFWTT_DELAI_SESSION_MUETTE)
         base_st = os.path.join(DOSSIER, "ffwtt_test_strict.db")
         for f in (base_st, base_st + "-journal"):
             if os.path.exists(f): os.remove(f)
-        env_st = dict(env); env_st.update(FFWTT_DB=base_st, FFWTT_MAX_PAR_IP="3", FFWTT_CREATIONS_PAR_IP="2")
+        env_st = dict(env); env_st.update(FFWTT_DB=base_st, FFWTT_MAX_PAR_IP="3", FFWTT_CREATIONS_PAR_IP="2",
+                                          FFWTT_DELAI_SESSION_MUETTE="4")
         journal_st = open("ffwtt_test_strict.log", "w", encoding="utf-8")
         srv_st = subprocess.Popen([sys.executable, "ffwtt_server.py", "--port", str(PORT + 5), "--name", "Strict"],
                                   stdout=journal_st, stderr=subprocess.STDOUT, env=env_st)
@@ -1622,6 +1629,47 @@ def main():
             time.sleep(1.5)
             s_ = socket.create_connection(("127.0.0.1", PORT + 5), timeout=8)
             verifier("securite : une connexion fermee libere sa place", opcodes(lire(s_, 0.6))[:2] == [1, 4]); s_.close()
+
+            # -- reconnexion d'un compte dont l'ancienne connexion est ouverte mais muette (client fige, connexion tombee
+            # sans fermeture) : refusee (v4) tant qu'elle a parle recemment ; au-dela du delai, l'ancienne est fermee
+            # comme une deconnexion ordinaire (op60 aux autres joueurs) et la nouvelle acceptee.
+            def salon_st(nom):
+                s_ = socket.create_connection(("127.0.0.1", PORT + 5), timeout=8); lire(s_, 0.6)
+                s_.sendall(P.build_frame(5, b"\x00" + P.field_int(P.VERSION_CLIENT)))
+                s_.sendall(P.build_frame(100, b"\x00" + P.field_str(nom) + P.field_str("secret")))
+                pid_ = next((champ_ints(pl)[0] for o, pl in frames(lire(s_, 1.0)) if o == 101 and champ_ints(pl)), 0)
+                s_.sendall(P.build_frame(207, b"\x00" + P.field_int(pid_ - 1000))); lire(s_, 0.6)
+                s_.sendall(P.build_frame(44, b"\x01")); lire(s_, 1.0)
+                s_.sendall(P.build_frame(71, b"\x01" + P.field_byte(1))); lire(s_, 1.0)
+                return s_, pid_
+            def fermee_par_le_serveur(s_):
+                s_.settimeout(1.5)
+                try:
+                    while s_.recv(65536): pass
+                    return True
+                except ConnectionError: return True
+                except (socket.timeout, OSError): return False
+            vu, _ = salon_st("Premier")
+            muet, pid_muet = salon_st("Second"); lire(vu, 0.5)
+            depart_muet = (60, b"\x01" + P.field_int(pid_muet) + P.field_v(0) + P.field_v(0))
+            muet.sendall(P.build_frame(768, b"\x00"))            # sa derniere trame (un pong), puis plus rien : ni pong ni rien
+            s_, r_tot = identification("Second", "secret", port=PORT + 5); s_.close()
+            r_vu_tot = frames(lire(vu, 0.5))
+            verifier("reconnexion : refusee (op101 b0 v4) quand l'ancienne connexion du compte a parle il y a moins de 4 s,"
+                     " et l'ancienne reste en place", refus101(4) in r_tot and depart_muet not in r_vu_tot and pid_muet > 1000,
+                     str([(o, pl.hex()) for o, pl in r_tot if o == 101]))
+            time.sleep(4.5)                                       # le delai de FFWTT_DELAI_SESSION_MUETTE est depasse
+            nouvelle, r_tard = identification("Second", "secret", port=PORT + 5)
+            r_tard += frames(lire(nouvelle, 3.0))     # op101 attend le menage du fil de l'ancienne (1 s au plus)
+            r_vu_tard = frames(lire(vu, 1.0))
+            journal_muet = open("ffwtt_test_strict.log", encoding="utf-8", errors="replace").read()
+            verifier("reconnexion : ancienne connexion muette depuis plus de 4 s fermee (op60 aux autres, journal), la "
+                     "nouvelle acceptee (op101 b1)",
+                     any(o == 101 and pl[:3] == b"\x00\x06\x01" for o, pl in r_tard) and depart_muet in r_vu_tard
+                     and fermee_par_le_serveur(muet)
+                     and "ancienne connexion du compte fermee pour une nouvelle (aucune trame depuis" in journal_muet,
+                     f"{[(o, pl.hex()) for o, pl in r_tard if o == 101]} op60 vu : {depart_muet in r_vu_tard}")
+            for s_ in (vu, muet, nouvelle): s_.close()
         finally:
             srv_st.terminate()
             try: srv_st.wait(timeout=5)
